@@ -31,6 +31,8 @@ ENV_BAT = HERE / "env.bat"
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
 LLM_PROVIDERS = ["claude_code", "deepseek", "gemini", "openai", "openrouter", "ollama"]
 NO_KEY_PROVIDERS = {"claude_code", "ollama"}
+MUSIC_LABELS = {"auto": "Best fit for each video (AI picks)", "fixed": "Always the same track",
+                "none": "No music (voice only)"}
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -176,7 +178,7 @@ class App:
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.tabs = {}
-        for name in ("Dashboard", "Review", "History", "Music", "Settings", "Setup", "Logs"):
+        for name in ("Dashboard", "Review", "History", "Music", "Clips", "Settings", "Setup", "Logs"):
             f = ttk.Frame(self.nb, padding=10)
             self.nb.add(f, text=name)
             self.tabs[name] = f
@@ -184,6 +186,7 @@ class App:
         self.build_review()
         self.build_history()
         self.build_music()
+        self.build_clips()
         self.build_settings()
         self.build_setup()
         self.build_logs()
@@ -241,6 +244,7 @@ class App:
         self.refresh_review_lists()
         self.refresh_history()
         self.refresh_music()
+        self.refresh_clips()
         self.refresh_logs()
         if not lists_only:
             self.load_settings_form()
@@ -409,8 +413,6 @@ class App:
         mpt = mpt_dir()
         if not (mpt / ".venv" / "Scripts" / "python.exe").exists():
             alerts.append(("red", f"MoneyPrinterTurbo not found in {mpt}. See the Setup tab."))
-        elif not eng.patch_applied(mpt):
-            alerts.append(("orange", "MPT patch is missing (after an MPT update?). Apply it in the Setup tab."))
         try:
             if read_mpt_config().get("app", {}).get("upload_post_auto_upload"):
                 alerts.append(("red", "MPT auto-upload is ON: videos could skip your approval. "
@@ -461,7 +463,10 @@ class App:
         info.pack(side="left", fill="x", expand=True, padx=10)
         self.video_info = ttk.Label(info, text="", foreground="#555", justify="left")
         self.video_info.pack(anchor="w")
-        ttk.Button(info, text="▶ Play video", command=self.play_video).pack(anchor="w", pady=6)
+        btns = ttk.Frame(info)
+        btns.pack(anchor="w", pady=6)
+        ttk.Button(btns, text="▶ Play video", command=self.play_video).pack(side="left")
+        ttk.Button(btns, text="♪ Change music...", command=self.change_music).pack(side="left", padx=6)
 
         ttk.Label(d, text="YouTube title").pack(anchor="w", pady=(8, 0))
         self.title_var = tk.StringVar()
@@ -512,6 +517,8 @@ class App:
         size = human(video.stat().st_size) if video.exists() else "missing"
         self.video_info.config(text=f"Topic: {meta.get('topic', '-')}\nMusic: {meta.get('music', '-')}\n"
                                     f"Rendered: {meta.get('rendered', '-')}\nFile: {video.name} ({size})\n"
+                                    f"Footage: {len(meta.get('clips', []))} clips"
+                                    f"{', credit: ' + '; '.join(meta['credits']) if meta.get('credits') else ''}\n"
                                     f"Status: {'approved' if folder == eng.APPROVED else 'waiting for review'}")
         self.approve_btn.config(state="normal" if folder == eng.REVIEW else "disabled")
         self.show_thumb(video, stem)
@@ -535,6 +542,46 @@ class App:
             video = eng.pair(*self.current)[0]
             if video.exists():
                 open_path(video)
+
+    def change_music(self):
+        """Pick another approved track (or none) for the selected video; only the final mix is redone."""
+        if not self.current:
+            messagebox.showinfo("Select", "Select a video first.")
+            return
+        folder, stem = self.current
+        if not (eng.WORK / stem / "combined.mp4").exists():
+            messagebox.showinfo("Not possible", "This video was made before music swapping existed, "
+                                                "or its working files were cleaned up.")
+            return
+        tracks = eng.usable_tracks()
+        meta = eng.load_meta(folder, stem)
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Change music")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        frm = ttk.Frame(dlg, padding=14)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Music for: {self.title_var.get()}", style="Head.TLabel",
+                  wraplength=int(520 * self.f)).pack(anchor="w")
+        ttk.Label(frm, text=f"Now: {meta.get('music', 'none')}. Use ▶ to listen to a track first.",
+                  foreground="#555").pack(anchor="w", pady=(0, 8))
+        choice = tk.StringVar(value=meta.get("music", "none"))
+        for name, _, tags in [("none", "", "voice only")] + tracks:
+            row = ttk.Frame(frm)
+            row.pack(fill="x", pady=1)
+            ttk.Radiobutton(row, text=f"{name}   ({tags})" if name != "none" else "No music (voice only)",
+                            value=name, variable=choice).pack(side="left")
+            if name != "none":
+                ttk.Button(row, text="▶", width=3, command=lambda n=name: open_path(eng.SAFE_MUSIC / n)
+                           ).pack(side="right")
+
+        def go():
+            dlg.destroy()
+            self.start_run(["--remix", stem, choice.get()], "Music change")
+        bar = ttk.Frame(frm)
+        bar.pack(fill="x", pady=(10, 0))
+        ttk.Button(bar, text="Remix (about a minute)", command=go).pack(side="right")
+        ttk.Button(bar, text="Cancel", command=dlg.destroy).pack(side="right", padx=6)
 
     def save_video(self, quiet=False):
         if not self.current:
@@ -572,11 +619,59 @@ class App:
         if folder != eng.REVIEW:
             messagebox.showinfo("Approved video", "Move it back to review first, then reject it.")
             return
-        if messagebox.askyesno("Reject", f"Delete this video for good?\n\n{self.title_var.get()}"):
-            eng.reject(stem)
-            self.current = None
-            self.thumb.config(image="", text="(select a video)")
-            self.refresh_all(lists_only=True)
+        reason = self.ask_reject_reason()
+        if not reason:
+            return
+        try:
+            eng.reject(stem, *reason)
+        except (ValueError, OSError) as e:
+            messagebox.showerror("Can't reject", str(e))
+            return
+        self.set_status("Rejected. Your reason will shape future videos (see History > What it learned).")
+        self.current = None
+        self.thumb.config(image="", text="(select a video)")
+        self.refresh_all(lists_only=True)
+
+    def ask_reject_reason(self):
+        """Modal dialog: why is it being rejected? Returns (category, details) or None."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Why reject this video?")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        result = {}
+        frm = ttk.Frame(dlg, padding=14)
+        frm.pack(fill="both", expand=True)
+        wrap = int(560 * self.f)
+        ttk.Label(frm, text=self.title_var.get(), style="Head.TLabel", wraplength=wrap).pack(anchor="w")
+        ttk.Label(frm, text="The video is deleted, but your reason is kept and teaches the next videos "
+                            "(topics, script and footage).", foreground="#555", wraplength=wrap
+                  ).pack(anchor="w", pady=(2, 8))
+        choice = tk.StringVar()
+        for key, label in eng.REJECT_REASONS.items():
+            ttk.Radiobutton(frm, text=label, value=key, variable=choice).pack(anchor="w", pady=1)
+        ttk.Label(frm, text="Details (the more specific, the better it learns)").pack(anchor="w", pady=(10, 0))
+        note = tk.Text(frm, height=4, width=62, wrap="word", font=("Segoe UI", 10))
+        note.pack(fill="x")
+        note.focus_set()
+        ttk.Label(frm, text="Voice, caption and music problems can't be learned automatically: "
+                            "change them in Settings and Music.", foreground="#777", wraplength=wrap
+                  ).pack(anchor="w", pady=(6, 0))
+
+        def confirm():
+            text = note.get("1.0", "end").strip()
+            if not choice.get():
+                messagebox.showwarning("Reason needed", "Pick what was wrong first.", parent=dlg)
+            elif choice.get() == "other" and not text:
+                messagebox.showwarning("Details needed", "Describe what was wrong.", parent=dlg)
+            else:
+                result["value"] = (choice.get(), text)
+                dlg.destroy()
+        bar = ttk.Frame(frm)
+        bar.pack(fill="x", pady=(10, 0))
+        ttk.Button(bar, text="Reject and teach", command=confirm).pack(side="right")
+        ttk.Button(bar, text="Cancel", command=dlg.destroy).pack(side="right", padx=6)
+        self.root.wait_window(dlg)
+        return result.get("value")
 
     def back_to_review(self):
         sel = self.approved_tree.selection()
@@ -593,7 +688,18 @@ class App:
     def build_history(self):
         f = self.tabs["History"]
         ttk.Label(f, text="Uploads (they count against the monthly quota)", style="Head.TLabel").pack(anchor="w")
-        fr, self.hist_tree = self.tree(f, ("Time", "Title", "Status", "Request ID"), (140, 520, 100, 280), 14)
+        bar = ttk.Frame(f)
+        bar.pack(side="bottom", fill="x", pady=(6, 0))     # packed first so it stays visible
+        ttk.Button(bar, text="Open YouTube Studio",
+                   command=lambda: webbrowser.open("https://studio.youtube.com")).pack(side="left")
+        ttk.Button(bar, text="Open posted videos folder",
+                   command=lambda: open_path(eng.POSTED)).pack(side="left", padx=6)
+        fb = ttk.LabelFrame(f, text="Rejected videos (your reasons teach future videos)", padding=8)
+        fb.pack(side="bottom", fill="x", pady=(6, 0))
+        fr, self.fb_tree = self.tree(fb, ("Time", "Reason", "Details", "Video"), (130, 250, 380, 300), 4)
+        fr.pack(fill="x")
+        ttk.Button(fb, text="What it learned...", command=self.show_lessons).pack(anchor="w", pady=(6, 0))
+        fr, self.hist_tree = self.tree(f, ("Time", "Title", "Status", "Request ID"), (140, 520, 100, 280), 8)
         fr.pack(fill="both", expand=True)
         box = ttk.LabelFrame(f, text="Needs checking (upload outcome was unclear; never retried automatically)",
                              padding=8)
@@ -605,14 +711,22 @@ class App:
         ttk.Button(bar, text="It's live on YouTube", command=lambda: self.resolve(True)).pack(side="left")
         ttk.Button(bar, text="Not uploaded (back to approved)",
                    command=lambda: self.resolve(False)).pack(side="left", padx=6)
-        bar = ttk.Frame(f)
-        bar.pack(fill="x")
-        ttk.Button(bar, text="Open YouTube Studio",
-                   command=lambda: webbrowser.open("https://studio.youtube.com")).pack(side="left")
-        ttk.Button(bar, text="Open posted videos folder",
-                   command=lambda: open_path(eng.POSTED)).pack(side="left", padx=6)
+
+    def show_lessons(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("What the next videos are being taught")
+        dlg.transient(self.root)
+        text = tk.Text(dlg, width=84, height=22, wrap="word", font=("Segoe UI", 10), padx=10, pady=10)
+        text.insert("1.0", eng.lessons_summary())
+        text.config(state="disabled")
+        text.pack(fill="both", expand=True)
+        ttk.Button(dlg, text="Close", command=dlg.destroy).pack(pady=8)
 
     def refresh_history(self):
+        self.fill(self.fb_tree, [
+            (str(i), (r.get("time", "").replace("T", " "), eng.REJECT_REASONS.get(r.get("category"), "?"),
+                      r.get("note") or "-", r.get("title") or r.get("topic") or "-"))
+            for i, r in reversed(list(enumerate(eng.load_feedback())))])
         ledger = eng.load_ledger()
         self.fill(self.hist_tree, [
             (str(i), (e.get("time", "").replace("T", " "), e.get("title", ""), e.get("status", ""),
@@ -636,24 +750,35 @@ class App:
     # ---- Music ---------------------------------------------------------------------
     def build_music(self):
         f = self.tabs["Music"]
-        ttk.Label(f, text="Only tracks listed here are ever used. No tracks = voice-only videos "
-                          "(MPT's bundled songs caused a Content ID block, so they're never used).",
-                  wraplength=int(1100 * self.f), foreground="#555").pack(anchor="w")
-        fr, self.music_tree = self.tree(f, ("File", "Source / license", "File present"), (300, 600, 100), 14)
-        fr.pack(fill="both", expand=True, pady=6)
+        ttk.Label(f, text="Only tracks listed here are ever used (never MPT's bundled songs, which caused a Content ID "
+                          "block). The mood tags tell the AI which video each track fits. Choose how music is "
+                          "picked, or fix one track, in Settings. You can also swap the music of a single video "
+                          "in Review.", wraplength=int(1100 * self.f), foreground="#555").pack(anchor="w")
         bar = ttk.Frame(f)
-        bar.pack(fill="x")
+        bar.pack(side="bottom", fill="x", pady=(6, 0))
         ttk.Button(bar, text="Add track...", command=self.add_track).pack(side="left")
         ttk.Button(bar, text="Remove selected", command=self.remove_track).pack(side="left", padx=6)
-        ttk.Button(bar, text="Open YouTube Audio Library",
+        ttk.Button(bar, text="▶ Listen", command=self.listen_track).pack(side="left")
+        ttk.Button(bar, text="Free music: YouTube Audio Library",
                    command=lambda: webbrowser.open("https://studio.youtube.com/channel/UC/music")
-                   ).pack(side="left")
-        ttk.Button(bar, text="Open music folder",
-                   command=lambda: open_path(eng.SAFE_MUSIC)).pack(side="right")
+                   ).pack(side="left", padx=6)
+        ttk.Button(bar, text="Free music: Mixkit",
+                   command=lambda: webbrowser.open("https://mixkit.co/free-stock-music/mood/energetic/")).pack(side="left")
+        ttk.Button(bar, text="Open music folder", command=lambda: open_path(eng.SAFE_MUSIC)).pack(side="right")
+        fr, self.music_tree = self.tree(f, ("File", "Mood tags", "Source / license", "File present"),
+                                        (250, 330, 430, 90), 14)
+        fr.pack(fill="both", expand=True, pady=6)
 
     def refresh_music(self):
-        self.fill(self.music_tree, [(name, (name, src, "yes" if ok else "MISSING"))
-                                    for name, src, ok in eng.music_entries()])
+        self.fill(self.music_tree, [(name, (name, tags or "-", src, "yes" if ok else "MISSING"))
+                                    for name, src, tags, ok in eng.music_entries()])
+        if hasattr(self, "track_box"):
+            self.track_box.config(values=[n for n, _, _ in eng.usable_tracks()])
+
+    def listen_track(self):
+        sel = self.music_tree.selection()
+        if sel and (eng.SAFE_MUSIC / sel[0]).exists():
+            open_path(eng.SAFE_MUSIC / sel[0])
 
     def add_track(self):
         path = filedialog.askopenfilename(
@@ -672,6 +797,9 @@ class App:
             anchor="w", pady=(8, 0))
         src = tk.StringVar(value="YouTube Audio Library, attribution not required")
         ttk.Entry(frm, textvariable=src, width=70).pack(fill="x")
+        ttk.Label(frm, text="Mood tags (e.g. energetic, upbeat, fun, fast, calm, cinematic)").pack(anchor="w", pady=(8, 0))
+        tags = tk.StringVar()
+        ttk.Entry(frm, textvariable=tags, width=70).pack(fill="x")
         ok = tk.BooleanVar()
         ttk.Checkbutton(frm, variable=ok, text="I confirm this track needs no attribution and is free "
                                                "to use in monetized YouTube videos.").pack(anchor="w", pady=10)
@@ -681,7 +809,7 @@ class App:
                 messagebox.showwarning("Confirm", "Tick the confirmation first.", parent=dlg)
                 return
             try:
-                eng.add_track(path, src.get())
+                eng.add_track(path, src.get(), tags.get())
             except (ValueError, OSError) as e:
                 messagebox.showerror("Can't add", str(e), parent=dlg)
                 return
@@ -699,6 +827,75 @@ class App:
             eng.remove_track(sel[0])
             self.refresh_music()
 
+    # ---- Clips (your own library) ---------------------------------------------------------
+    def build_clips(self):
+        f = self.tabs["Clips"]
+        ttk.Label(f, text="Footage comes from Pixabay (and Coverr if you add its key in Setup). You can add your own "
+                          "clips here: download them by hand from Mixkit, Vidsplay or Coverr, then add them with a few "
+                          "tags. The picker considers them whenever their tags match what a scene is about. Mixkit's "
+                          "terms ban bots, so the app never downloads from Mixkit itself. Vidsplay requires a visible "
+                          "credit: it's added to the video description automatically.",
+                  wraplength=int(1100 * self.f), foreground="#555").pack(anchor="w")
+        bar = ttk.Frame(f)
+        bar.pack(side="bottom", fill="x", pady=(6, 0))
+        ttk.Button(bar, text="Add clip...", command=self.add_clip).pack(side="left")
+        ttk.Button(bar, text="Remove selected", command=self.remove_clip).pack(side="left", padx=6)
+        for label, url in (("Mixkit", "https://mixkit.co/free-stock-video/"), ("Vidsplay", "https://www.vidsplay.com/"),
+                           ("Coverr", "https://coverr.co/stock-video-footage")):
+            ttk.Button(bar, text=f"Free clips: {label}", command=lambda u=url: webbrowser.open(u)).pack(side="left", padx=2)
+        ttk.Button(bar, text="Open clips folder", command=lambda: open_path(eng.CLIPS)).pack(side="right")
+        fr, self.clips_tree = self.tree(f, ("File", "Source", "Tags", "File present"), (300, 130, 530, 90), 14)
+        fr.pack(fill="both", expand=True, pady=6)
+
+    def refresh_clips(self):
+        self.fill(self.clips_tree, [(name, (name, src, tags, "yes" if ok else "MISSING"))
+                                    for name, src, tags, ok in eng.clip_entries()])
+
+    def add_clip(self):
+        path = filedialog.askopenfilename(
+            title="Choose a clip you downloaded",
+            filetypes=[("Video", " ".join(f"*{e}" for e in sorted(eng.footage.VIDEO_EXT))), ("All files", "*.*")])
+        if not path:
+            return
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Add clip")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        frm = ttk.Frame(dlg, padding=14)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=Path(path).name, style="Head.TLabel").pack(anchor="w")
+        ttk.Label(frm, text="Source").pack(anchor="w", pady=(8, 0))
+        src = tk.StringVar(value="Mixkit")
+        ttk.Combobox(frm, textvariable=src, values=["Mixkit", "Vidsplay", "Coverr", "Other"], width=20).pack(anchor="w")
+        ttk.Label(frm, text="Tags: what the clip shows (e.g. money, cash, counting, hands)").pack(anchor="w", pady=(8, 0))
+        tags = tk.StringVar()
+        ttk.Entry(frm, textvariable=tags, width=70).pack(fill="x")
+        ok = tk.BooleanVar()
+        ttk.Checkbutton(frm, variable=ok, text="I downloaded this myself and its license allows use in monetized "
+                                               "YouTube videos.").pack(anchor="w", pady=10)
+
+        def save():
+            if not ok.get():
+                messagebox.showwarning("Confirm", "Tick the confirmation first.", parent=dlg)
+                return
+            try:
+                eng.add_clip(path, src.get(), tags.get())
+            except (ValueError, OSError) as e:
+                messagebox.showerror("Can't add", str(e), parent=dlg)
+                return
+            dlg.destroy()
+            self.refresh_clips()
+        bar = ttk.Frame(frm)
+        bar.pack(fill="x")
+        ttk.Button(bar, text="Add", command=save).pack(side="right")
+        ttk.Button(bar, text="Cancel", command=dlg.destroy).pack(side="right", padx=6)
+
+    def remove_clip(self):
+        sel = self.clips_tree.selection()
+        if sel and messagebox.askyesno("Remove", f"Remove {sel[0]} from your clip library and delete the file?"):
+            eng.remove_clip(sel[0])
+            self.refresh_clips()
+
     # ---- Settings ------------------------------------------------------------------
     def build_settings(self):
         f = self.tabs["Settings"]
@@ -706,7 +903,8 @@ class App:
         form.pack(fill="x")
         form.columnconfigure(1, weight=1)
         self.sv = {k: tk.StringVar() for k in ("niche", "language", "voice", "monthly_uploads", "run_times",
-                                               "buffer", "music_volume", "clean_after_days", "privacy")}
+                                               "buffer", "music_volume", "clean_after_days", "privacy", "voice_rate",
+                                               "music_mode", "music_track")}
         r = 0
 
         def field(label, widget, hint=""):
@@ -721,6 +919,8 @@ class App:
         field("Language", ttk.Entry(form, textvariable=self.sv["language"], width=12), "e.g. en-US")
         self.voice_box = ttk.Combobox(form, textvariable=self.sv["voice"])
         field("Voice", self.voice_box, "list fills after 'Run full check' in Setup")
+        field("Voice speed", ttk.Spinbox(form, from_=0.7, to=1.5, increment=0.02, textvariable=self.sv["voice_rate"],
+                                         width=8), "1.0 = normal, 1.12 = a bit fast and energetic")
         self.rules_text = tk.Text(form, height=4, wrap="word", font=("Segoe UI", 10))
         field("Script rules", self.rules_text, "instructions for the script writer")
         field("Uploads per month", ttk.Spinbox(form, from_=1, to=1000, textvariable=self.sv["monthly_uploads"],
@@ -729,6 +929,11 @@ class App:
               "comma separated, e.g. 09:00, 19:00 (re-registers the schedule)")
         field("Videos kept waiting", ttk.Spinbox(form, from_=0, to=20, textvariable=self.sv["buffer"], width=8),
               "renders stop when this many are in review + approved")
+        field("Music", ttk.Combobox(form, textvariable=self.sv["music_mode"], state="readonly", width=34,
+                                    values=list(MUSIC_LABELS.values())), "how the background track is chosen")
+        self.track_box = ttk.Combobox(form, textvariable=self.sv["music_track"], state="readonly", width=40,
+                                      values=[n for n, _, _ in eng.usable_tracks()])
+        field("Track to always use", self.track_box, "only used with 'Always the same track'")
         field("Music volume", ttk.Spinbox(form, from_=0, to=1, increment=0.01,
                                           textvariable=self.sv["music_volume"], width=8), "0-1, voice stays louder")
         field("Clean MPT cache after", ttk.Spinbox(form, from_=0, to=365, textvariable=self.sv["clean_after_days"],
@@ -752,6 +957,9 @@ class App:
         for k in ("niche", "language", "voice", "monthly_uploads", "buffer", "music_volume", "clean_after_days"):
             self.sv[k].set(str(s[k]))
         self.sv["run_times"].set(", ".join(s["run_times"]))
+        self.sv["voice_rate"].set(str(s["voice_rate"]))
+        self.sv["music_mode"].set(MUSIC_LABELS[s["music_mode"]])
+        self.sv["music_track"].set(s["music_track"])
         self.rules_text.delete("1.0", "end")
         self.rules_text.insert("1.0", s["script_rules"])
         try:
@@ -769,6 +977,9 @@ class App:
         old = eng.load_settings()
         new = {k: self.sv[k].get().strip() for k in ("niche", "language", "voice", "monthly_uploads",
                                                      "buffer", "music_volume", "clean_after_days")}
+        new["voice_rate"] = self.sv["voice_rate"].get().strip()
+        new["music_mode"] = {v: k for k, v in MUSIC_LABELS.items()}.get(self.sv["music_mode"].get(), "auto")
+        new["music_track"] = self.sv["music_track"].get().strip()
         new["script_rules"] = self.rules_text.get("1.0", "end").strip()
         new["run_times"] = [t.strip() for t in self.sv["run_times"].get().split(",") if t.strip()]
         try:
@@ -854,9 +1065,6 @@ class App:
         ttk.Button(line, text="Browse...", command=self.browse_mpt).pack(side="left", padx=4)
         ttk.Button(line, text="Save", command=self.save_mpt).pack(side="left")
 
-        cell = row("patch", "MPT patch")
-        ttk.Button(cell, text="Apply patch", command=self.apply_patch).pack(anchor="w", pady=2)
-
         cell = row("llm", "Script writer (LLM)")
         line = ttk.Frame(cell)
         line.pack(anchor="w", pady=2)
@@ -867,14 +1075,22 @@ class App:
         ttk.Entry(line, textvariable=self.llm_key, show="•", width=40).pack(side="left", padx=4)
         ttk.Button(line, text="Save", command=self.save_llm).pack(side="left")
 
-        cell = row("footage", "Stock footage (Pixabay)")
+        cell = row("footage", "Stock footage")
         line = ttk.Frame(cell)
         line.pack(anchor="w", pady=2)
         self.pixabay_key = tk.StringVar()
-        ttk.Label(line, text="API key:").pack(side="left")
-        ttk.Entry(line, textvariable=self.pixabay_key, show="•", width=40).pack(side="left", padx=4)
+        ttk.Label(line, text="Pixabay key:").pack(side="left")
+        ttk.Entry(line, textvariable=self.pixabay_key, show="•", width=34).pack(side="left", padx=4)
         ttk.Button(line, text="Save", command=self.save_pixabay).pack(side="left")
         ttk.Button(line, text="Get a key", command=lambda: webbrowser.open("https://pixabay.com/api/docs/")
+                   ).pack(side="left", padx=4)
+        line = ttk.Frame(cell)
+        line.pack(anchor="w", pady=2)
+        self.coverr_key = tk.StringVar()
+        ttk.Label(line, text="Coverr key (optional):").pack(side="left")
+        ttk.Entry(line, textvariable=self.coverr_key, show="•", width=34).pack(side="left", padx=4)
+        ttk.Button(line, text="Save", command=self.save_coverr).pack(side="left")
+        ttk.Button(line, text="Request a key", command=lambda: webbrowser.open("https://api.coverr.co/docs/")
                    ).pack(side="left", padx=4)
 
         cell = row("upload", "Upload-Post")
@@ -917,9 +1133,6 @@ class App:
         py_ok = (mpt / ".venv" / "Scripts" / "python.exe").exists()
         self.set_row("mpt", py_ok, f"Installed in {mpt}" if py_ok else
                      f"No MPT Python in {mpt}. Run install.bat, or browse to your MPT folder.")
-        patched = eng.patch_applied(mpt)
-        self.set_row("patch", patched, "Applied: real footage only + Pixabay tags kept for the relevance filter."
-                     if patched else "Missing. MPT updates remove it; click Apply patch.")
         try:
             app_cfg = read_mpt_config().get("app", {})
         except Exception as e:
@@ -936,9 +1149,11 @@ class App:
                         f" ({d.get('seconds', '?')} s)" if d else ". Not tested yet."))
         pix = bool(app_cfg.get("pixabay_api_keys"))
         d = self.doctor.get("footage") or {}
+        cov = bool(app_cfg.get("coverr_api_keys"))
         self.set_row("footage", d.get("ok") if d else (pix or False),
-                     f"Source: {app_cfg.get('video_source', '-')}, key {'saved' if pix else 'missing'}"
-                     + (f". Test: {d.get('sample_results', 0)} sample clips found" if d else ""))
+                     f"Pixabay key {'saved' if pix else 'MISSING'}, Coverr key {'saved' if cov else 'not set (optional)'}, "
+                     f"{len(eng.clip_entries())} clip(s) in your library"
+                     + (f". Test search: {d.get('sample_results')}" if d else ". Not tested yet."))
         self.up_enabled.set(bool(app_cfg.get("upload_post_enabled")))
         self.up_profile.set(app_cfg.get("upload_post_username", ""))
         up_ok = (bool(app_cfg.get("upload_post_enabled")) and bool(app_cfg.get("upload_post_api_key"))
@@ -1007,22 +1222,6 @@ class App:
         set_mpt_dir(path)
         self.refresh_all()
 
-    def apply_patch(self):
-        mpt = mpt_dir()
-        if eng.patch_applied(mpt):
-            messagebox.showinfo("Patch", "The patch is already applied.")
-            return
-        patch = str(HERE / "patches" / "mpt-material.patch")
-        code, out = run_hidden(["git", "-C", str(mpt), "apply", "--check", patch])
-        if code == 0:
-            code, out = run_hidden(["git", "-C", str(mpt), "apply", patch])
-        if code == 0:
-            messagebox.showinfo("Patch", "Patch applied.")
-        else:
-            messagebox.showerror("Patch failed", "MPT's code changed too much for the patch to apply "
-                                                 f"automatically. See the README (MPT patch).\n\n{out[-500:]}")
-        self.refresh_setup()
-
     def save_llm(self):
         provider = self.llm_var.get().strip()
         if not provider or not self.confirm_config_write():
@@ -1044,6 +1243,16 @@ class App:
         self.pixabay_key.set("")
         self.doctor.pop("footage", None)
         self.set_status("Pixabay key saved.")
+        self.refresh_setup()
+
+    def save_coverr(self):
+        key = self.coverr_key.get().strip()
+        if not key or not self.confirm_config_write():
+            return
+        write_mpt_config({"coverr_api_keys": [key]})
+        self.coverr_key.set("")
+        self.doctor.pop("footage", None)
+        self.set_status("Coverr key saved. Its videos will be searched along with Pixabay's.")
         self.refresh_setup()
 
     def save_upload(self):

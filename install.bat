@@ -1,6 +1,6 @@
 @echo off
-rem One-time setup on a new PC: installs MoneyPrinterTurbo (pinned version), applies the
-rem Shorts Autopilot patch, writes env.bat and opens the app.
+rem One-time setup on a new PC: installs MoneyPrinterTurbo (pinned version),
+rem writes env.bat and opens the app.
 rem Needs: git and uv (https://docs.astral.sh/uv/) on PATH.
 setlocal
 set "HERE=%~dp0"
@@ -25,12 +25,6 @@ pushd "%MPT_DIR%"
 uv python install 3.11 || (popd & pause & exit /b 1)
 uv sync --frozen || (popd & pause & exit /b 1)
 
-echo Applying the Shorts Autopilot patch ...
-findstr /c:"local edit: real footage only" app\services\material.py >nul && (
-    echo Patch already applied.
-) || (
-    git apply "%HERE%patches\mpt-material.patch" || echo WARNING: patch did not apply. See README, section "MPT patch".
-)
 popd
 
 echo.

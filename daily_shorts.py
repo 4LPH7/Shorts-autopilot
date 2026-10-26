@@ -27,23 +27,31 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import footage  # noqa: E402  (sits next to this file)
+
 DEFAULTS = {
     "niche": "money psychology and surprising personal finance facts",
     "language": "en-US",
-    "voice": "en-US-ChristopherNeural-Male",
+    "voice": "en-US-GuyNeural-Male",    # lively and expressive; any voice from the Settings list works
+                                        # (the "Multilingual" voices stall on the free Edge TTS service)
+    "voice_rate": 1.12,                 # 1.0 = normal; 1.12 is a bit fast and punchy
     "script_rules": (
-        "Write 120-140 words (about 50 seconds spoken). "
+        "Write 130-150 words (about 50 seconds when spoken fast). "
+        "Fun, energetic and conversational, like an excited friend sharing a surprising fact. "
         "First sentence is a hook that creates a curiosity gap, no greetings. "
-        "Short punchy sentences. End with a question that invites comments."
+        "Very short punchy sentences, contractions, a little humor. End with a question that invites comments."
     ),
     "monthly_uploads": 10,              # Upload-Post free plan; raise if you upgrade
     "run_times": ["09:00", "19:00"],    # Task Scheduler times; upload spacing uses them
     "buffer": 3,                        # videos to keep waiting for review/upload
-    "music_volume": 0.12,               # quiet bed under the voice
+    "music_mode": "auto",               # auto = AI picks the best-fitting approved track; fixed; none
+    "music_track": "",                  # the track used when music_mode is "fixed"
+    "music_volume": 0.2,                # a clearly audible bed, about 5 dB under the voice
     "clean_after_days": 14,             # delete MPT render caches older than this (0 = never)
 }
+MUSIC_MODES = ("auto", "fixed", "none")
 
-PATCH_MARKERS = ('"video_type": "film"', '"tags": str(v.get("tags")')
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
 HERE = Path(__file__).resolve().parent
 
@@ -51,8 +59,13 @@ HERE = Path(__file__).resolve().parent
 def set_base(base):
     """Point every data path at `base` (the project folder; tests use a temp dir)."""
     global BASE, SETTINGS, HISTORY, LOG_DIR, RUNS, LOCK, LEDGER, SAFE_MUSIC, MUSIC_SOURCES
-    global REVIEW, APPROVED, POSTED, CHECK, THUMBS
+    global REVIEW, APPROVED, POSTED, CHECK, THUMBS, FEEDBACK, LESSONS, WORK, CLIPS, CLIPS_SOURCES
     BASE = Path(base)
+    WORK = BASE / "work"                      # per-video leftovers that allow swapping the music later
+    CLIPS = BASE / "clips"                    # your hand-downloaded clips (Mixkit, Vidsplay, ...)
+    CLIPS_SOURCES = CLIPS / "SOURCES.txt"
+    FEEDBACK = BASE / "feedback.jsonl"        # one line per rejected video: why you rejected it
+    LESSONS = BASE / "lessons.json"           # rules distilled from the feedback (fed to the prompts)
     SETTINGS = BASE / "settings.json"
     HISTORY = BASE / "topics_used.txt"
     LOG_DIR = BASE / "logs"
@@ -100,6 +113,13 @@ def save_settings(s):
         if clean[k] < 0:
             raise ValueError(f"{k} can't be negative")
     clean["music_volume"] = float(clean["music_volume"])
+    clean["voice_rate"] = float(clean["voice_rate"])
+    if not 0.7 <= clean["voice_rate"] <= 1.5:
+        raise ValueError("voice speed must be between 0.7 and 1.5")
+    if not 0 <= clean["music_volume"] <= 1:
+        raise ValueError("music volume must be between 0 and 1")
+    if clean["music_mode"] not in MUSIC_MODES:
+        raise ValueError(f"music mode must be one of {MUSIC_MODES}")
     SETTINGS.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
     return clean
 
@@ -197,9 +217,147 @@ def unapprove(stem):
     move_pair(stem, APPROVED, REVIEW)
 
 
-def reject(stem):
-    for f in (*pair(REVIEW, stem), THUMBS / f"{stem}.png"):
-        f.unlink(missing_ok=True)
+REJECT_REASONS = {
+    "footage": "Footage doesn't match what's being said",
+    "hook": "Weak or boring opening / script",
+    "topic": "Topic is dull, repetitive or off-niche",
+    "facts": "Wrong, misleading or risky claim",
+    "length": "Too long or too short",
+    "audio": "Voice, captions or music problem",
+    "other": "Something else (explain)",
+}
+# Which prompt a reason teaches. "audio" can't be learned from prompts: change Settings instead.
+CATEGORY_AREA = {"footage": "footage", "hook": "script", "topic": "topic", "facts": "script",
+                 "length": "script", "other": "script"}
+LESSON_AREAS = ("topic", "script", "footage")
+
+
+def reject(stem, category, note=""):
+    """Record why a video was rejected (it teaches future videos), then delete it."""
+    if category not in REJECT_REASONS:
+        raise ValueError("pick a reason")
+    note = note.strip()
+    if category == "other" and not note:
+        raise ValueError("please describe what was wrong")
+    meta = load_meta(REVIEW, stem)
+    record = {"time": datetime.now().isoformat(timespec="seconds"), "category": category, "note": note,
+              "topic": meta.get("topic", ""), "title": meta.get("title", ""),
+              "script": meta.get("script", "")[:700], "music": meta.get("music", "")}
+    with FEEDBACK.open("a", encoding="utf-8") as fh:   # log first: never delete without recording why
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    for path in (*pair(REVIEW, stem), THUMBS / f"{stem}.png"):
+        path.unlink(missing_ok=True)
+    drop_work(stem)
+
+
+def load_feedback():
+    if not FEEDBACK.exists():
+        return []
+    rows = []
+    for line in FEEDBACK.read_text(encoding="utf-8").splitlines():
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            pass
+    return rows
+
+
+def parse_lessons(text):
+    """{area: [short rules]} from an LLM reply; unknown areas dropped, rules capped."""
+    match = re.search(r"\{.*\}", text, re.S)
+    data = json.loads(match.group(0)) if match else {}
+    out = {}
+    for area in LESSON_AREAS:
+        rules = data.get(area, []) if isinstance(data, dict) else []
+        rules = rules if isinstance(rules, list) else []
+        out[area] = [str(r).strip()[:200] for r in rules if str(r).strip()][:8]
+    return out
+
+
+def fallback_lessons(feedback, per_area=5):
+    """Rules straight from the newest rejection notes (used when the LLM can't distill)."""
+    out = {a: [] for a in LESSON_AREAS}
+    for row in reversed(feedback):
+        area = CATEGORY_AREA.get(row.get("category"))
+        text = (row.get("note") or REJECT_REASONS.get(row.get("category"), "")).strip()
+        if area == "topic" and row.get("topic"):
+            text += f' (rejected topic: "{row["topic"]}")'
+        if area and text and text not in out[area] and len(out[area]) < per_area:
+            out[area].append(text[:200])
+    return out
+
+
+def lessons_block(lessons, area):
+    """Prompt text for one area, or "" when there's nothing to apply."""
+    rules = (lessons or {}).get(area) or []
+    if not rules:
+        return ""
+    return ("Lessons from videos the channel owner rejected. Follow them strictly:\n"
+            + "\n".join(f"- {r}" for r in rules))
+
+
+def load_lessons():
+    if LESSONS.exists():
+        try:
+            return json.loads(LESSONS.read_text(encoding="utf-8"))
+        except ValueError:
+            pass
+    return {}
+
+
+def build_lessons(ask_llm):
+    """Distill all rejection feedback into short rules and save them (cached until new
+    feedback arrives). ask_llm(prompt) -> reply text. Falls back to the raw notes."""
+    feedback = load_feedback()
+    empty = {a: [] for a in LESSON_AREAS}
+    if not feedback:
+        return empty
+    current = load_lessons()
+    if current.get("based_on") == len(feedback):
+        return {a: current.get(a, []) for a in LESSON_AREAS}
+    entries = "\n".join(
+        f'- [{REJECT_REASONS.get(r.get("category"), r.get("category"))}] {r.get("note") or "(no note)"} '
+        f'| topic: {r.get("topic")} | title: {r.get("title")} | script start: {(r.get("script") or "")[:160]}'
+        for r in feedback[-40:])
+    prompt = (
+        "The owner of a faceless YouTube Shorts channel rejected these generated videos and said why:\n"
+        f"{entries}\n\n"
+        "Turn this into rules that will make FUTURE videos better. Reply with only a JSON object with "
+        'keys "topic" (choosing topics), "script" (writing the voiceover) and "footage" (picking stock '
+        "video clips). Each key holds at most 8 short, specific, imperative rules (under 25 words each). "
+        "Merge duplicates; when notes conflict, prefer the newest (listed last). Omit anything that "
+        "isn't actionable for that key.")
+    try:
+        rules = parse_lessons(ask_llm(prompt))
+    except Exception as e:   # includes bad JSON and LLM errors
+        print(f"Lessons: couldn't distill ({type(e).__name__}); using raw notes")
+        rules = empty
+    if not any(rules.values()):
+        rules = fallback_lessons(feedback)
+    LESSONS.write_text(json.dumps({"based_on": len(feedback), "updated": datetime.now().isoformat(
+        timespec="seconds"), **rules}, indent=2, ensure_ascii=False), encoding="utf-8")
+    return rules
+
+
+def lessons_summary():
+    """Plain text for the GUI: what future videos are being taught."""
+    feedback = load_feedback()
+    if not feedback:
+        return "No rejections yet. When you reject a video and say why, the reasons become rules here."
+    lessons = load_lessons()
+    pending = lessons.get("based_on") != len(feedback)
+    rules = fallback_lessons(feedback) if not lessons else {a: lessons.get(a, []) for a in LESSON_AREAS}
+    lines = [f"Based on {len(feedback)} rejection(s)."]
+    if pending:
+        lines.append("New feedback is waiting: the rules below are refreshed at the next render.")
+    for area in LESSON_AREAS:
+        lines.append(f"\n{area.upper()}")
+        lines += [f"  - {r}" for r in rules[area]] or ["  (nothing learned yet)"]
+    audio = sum(1 for r in feedback if r.get("category") == "audio")
+    if audio:
+        lines.append(f"\n{audio} voice/caption/music complaint(s) can't be learned automatically: "
+                     "change the voice, music volume or tracks in Settings and Music.")
+    return "\n".join(lines)
 
 
 def load_ledger():
@@ -218,6 +376,7 @@ def resolve_check(stem, uploaded):
     file = f"{stem}.mp4"
     if uploaded:
         move_pair(stem, CHECK, POSTED)
+        drop_work(stem)
         for e in ledger:
             if e.get("file") == file:
                 e["status"] = "posted"
@@ -229,44 +388,88 @@ def resolve_check(stem, uploaded):
 
 # ---- Music -----------------------------------------------------------------------
 
-def approved_tracks(sources_text, files_present):
-    """Tracks that are both in the folder AND listed with a source. Unlisted = never used."""
-    present = {f.lower(): f for f in files_present}
-    ok = []
-    for line in sources_text.splitlines():
-        name, sep, source = (p.strip() for p in line.partition("|"))
-        if line.strip().startswith("#") or not sep or not source:
-            continue
-        if Path(name).suffix.lower() in AUDIO_EXT and name.lower() in present:
-            ok.append(present[name.lower()])
-    return ok
-
-
-def music_entries():
-    """[(filename, source, file_present)] for every track listed in SOURCES.txt."""
-    if not MUSIC_SOURCES.exists():
-        return []
+def parse_music_sources(text):
+    """[(filename, source, tags)] from SOURCES.txt lines `filename | source | tags` (tags optional)."""
     out = []
-    for line in MUSIC_SOURCES.read_text(encoding="utf-8").splitlines():
-        name, sep, source = (p.strip() for p in line.partition("|"))
-        if line.strip().startswith("#") or not sep:
+    for line in text.splitlines():
+        if line.strip().startswith("#"):
             continue
-        out.append((name, source, (SAFE_MUSIC / name).is_file()))
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 2 and parts[0] and parts[1]:
+            out.append((parts[0], parts[1], parts[2] if len(parts) > 2 else ""))
     return out
 
 
-def add_track(src_file, source):
+def approved_tracks(sources_text, files_present):
+    """Tracks that are both in the folder AND listed with a source. Unlisted = never used."""
+    present = {f.lower(): f for f in files_present}
+    return [present[n.lower()] for n, _, _ in parse_music_sources(sources_text)
+            if Path(n).suffix.lower() in AUDIO_EXT and n.lower() in present]
+
+
+def music_entries():
+    """[(filename, source, tags, file_present)] for every track listed in SOURCES.txt."""
+    text = MUSIC_SOURCES.read_text(encoding="utf-8") if MUSIC_SOURCES.exists() else ""
+    return [(n, src, tags, (SAFE_MUSIC / n).is_file()) for n, src, tags in parse_music_sources(text)]
+
+
+def usable_tracks():
+    """[(filename, source, tags)] approved AND present: the only tracks that may be used."""
+    names = set(approved_tracks(MUSIC_SOURCES.read_text(encoding="utf-8") if MUSIC_SOURCES.exists() else "",
+                                [p.name for p in SAFE_MUSIC.glob("*") if p.is_file()]))
+    return [(n, s, t) for n, s, t, ok in music_entries() if ok and n in names]
+
+
+def recent_tracks(n=2):
+    """Tracks used by the latest videos, newest first (to avoid repeating one)."""
+    rows = []
+    for folder in (REVIEW, APPROVED, POSTED, CHECK):
+        for stem in stems(folder):
+            meta = load_meta(folder, stem)
+            rows.append((meta.get("rendered", ""), meta.get("music", "")))
+    return [m for _, m in sorted(rows, reverse=True)[:n] if m and m != "none"]
+
+
+def choose_track(settings, entries, ask_llm=None, topic="", script="", recent=()):
+    """The track to use, as a filename, or None for voice only.
+    mode "none" -> None. "fixed" -> the chosen track. "auto" -> Claude picks the best fit for
+    the script from the mood tags (never one of the `recent` tracks if there are enough others);
+    if that fails, a random track."""
+    names = [n for n, _, _ in entries]
+    mode = settings.get("music_mode", "auto")
+    if mode == "none" or not names:
+        return None
+    if mode == "fixed" and settings.get("music_track") in names:
+        return settings["music_track"]
+    pool = [e for e in entries if e[0] not in recent] if len(names) > len(set(recent)) + 1 else list(entries)
+    if len(pool) == 1 or ask_llm is None:
+        return random.choice(pool)[0]
+    listing = "\n".join(f"- {n}: {tags or 'no tags'}" for n, _, tags in pool)
+    try:
+        reply = ask_llm(
+            f"Pick the background music for a fun, energetic, fast-paced YouTube Short about: {topic}.\n"
+            f"Voiceover (start): {script[:500]}\n\nTracks (file: mood tags):\n{listing}\n\n"
+            "Choose the single track whose mood and energy best fit this video. "
+            'Reply with only JSON like {"track": "<exact file name>"}.')
+        pick = json.loads(re.search(r"\{.*\}", reply, re.S).group(0)).get("track")
+    except Exception:
+        pick = None
+    return pick if pick in [n for n, _, _ in pool] else random.choice(pool)[0]
+
+
+def add_track(src_file, source, tags=""):
     if not source.strip():
         raise ValueError("a source/license note is required")
     src = Path(src_file)
     if src.suffix.lower() not in AUDIO_EXT:
         raise ValueError(f"not an audio file: {src.name}")
-    if "|" in src.name:
-        raise ValueError("file names can't contain '|'")
+    if "|" in src.name or "|" in source or "|" in tags:
+        raise ValueError("the '|' character can't be used in names, sources or tags")
     SAFE_MUSIC.mkdir(exist_ok=True)
-    shutil.copyfile(src, SAFE_MUSIC / src.name)
+    if src.resolve() != (SAFE_MUSIC / src.name).resolve():
+        shutil.copyfile(src, SAFE_MUSIC / src.name)
     with MUSIC_SOURCES.open("a", encoding="utf-8") as f:
-        f.write(f"\n{src.name} | {source.strip()}")
+        f.write(f"\n{src.name} | {source.strip()}" + (f" | {tags.strip()}" if tags.strip() else ""))
 
 
 def remove_track(name):
@@ -274,6 +477,42 @@ def remove_track(name):
     keep = [l for l in lines if l.partition("|")[0].strip().lower() != name.lower() or l.strip().startswith("#")]
     MUSIC_SOURCES.write_text("\n".join(keep) + "\n", encoding="utf-8")
     (SAFE_MUSIC / name).unlink(missing_ok=True)
+
+
+# ---- Your clip library (clips/) ------------------------------------------------------
+
+def clip_entries():
+    """[(filename, source, tags, file_present)] for every clip listed in clips/SOURCES.txt."""
+    text = CLIPS_SOURCES.read_text(encoding="utf-8") if CLIPS_SOURCES.exists() else ""
+    return [(n, s, t, (CLIPS / n).is_file()) for n, s, t in parse_music_sources(text)]
+
+
+def add_clip(src_file, source, tags):
+    """Copy a hand-downloaded clip into clips/ and list it. Tags are how the picker finds it."""
+    src = Path(src_file)
+    if src.suffix.lower() not in footage.VIDEO_EXT:
+        raise ValueError(f"not a video file: {src.name}")
+    if not source.strip() or not tags.strip():
+        raise ValueError("a source (e.g. Mixkit, Vidsplay) and a few tags are required")
+    if "|" in src.name or "|" in source or "|" in tags:
+        raise ValueError("the '|' character can't be used in names, sources or tags")
+    CLIPS.mkdir(exist_ok=True)
+    if src.resolve() != (CLIPS / src.name).resolve():
+        shutil.copyfile(src, CLIPS / src.name)
+    with CLIPS_SOURCES.open("a", encoding="utf-8") as f:
+        f.write(f"\n{src.name} | {source.strip()} | {tags.strip()}")
+
+
+def remove_clip(name):
+    lines = CLIPS_SOURCES.read_text(encoding="utf-8").splitlines() if CLIPS_SOURCES.exists() else []
+    keep = [l for l in lines if l.partition("|")[0].strip().lower() != name.lower() or l.strip().startswith("#")]
+    CLIPS_SOURCES.write_text("\n".join(keep) + "\n", encoding="utf-8")
+    (CLIPS / name).unlink(missing_ok=True)
+
+
+def drop_work(stem):
+    """Delete the leftovers that allow swapping a video's music (once it's gone or posted)."""
+    shutil.rmtree(WORK / stem, ignore_errors=True)
 
 
 # ---- Run lock, history, cleanup -----------------------------------------------------
@@ -364,14 +603,6 @@ def clean_mpt_cache(mpt_dir, days, now=None):
     return freed
 
 
-def patch_applied(mpt_dir):
-    material = Path(mpt_dir) / "app" / "services" / "material.py"
-    if not material.exists():
-        return False
-    text = material.read_text(encoding="utf-8")
-    return all(m in text for m in PATCH_MARKERS)
-
-
 # ---- Pure helpers ------------------------------------------------------------------
 
 def parse_topics(text, used, n):
@@ -389,11 +620,6 @@ def parse_topics(text, used, n):
     return picked[:n]
 
 
-def parse_ids(text):
-    match = re.search(r"\[.*?\]", text, re.S)
-    return {str(i) for i in json.loads(match.group(0))} if match else set()
-
-
 def slugify(text):
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50]
 
@@ -407,12 +633,13 @@ def ask(llm, prompt):
     return reply
 
 
-def pick_topic(llm, s):
+def pick_topic(llm, s, lessons=None):
     used = HISTORY.read_text(encoding="utf-8").splitlines() if HISTORY.exists() else []
     reply = ask(llm, (
         f"Give 6 YouTube Shorts video topics for the niche: {s['niche']}. "
         "Each topic is one specific, curiosity-driven idea in under 12 words. "
         f"Do not repeat or closely resemble these past topics: {used[-100:]}. "
+        f"{lessons_block(lessons, 'topic')}\n"
         "Reply with only a JSON array of strings."))
     topics = parse_topics(reply, used, 1)
     if not topics:
@@ -420,110 +647,184 @@ def pick_topic(llm, s):
     return topics[0]
 
 
-def pick_terms(llm, script):
-    """Short concrete search words, in script order. MPT's own terms are abstract
-    3-word phrases that mostly return 0 stock clips."""
-    reply = ask(llm, (
-        "For this voiceover, list 18 stock-video search terms in the same order as the script. "
-        "Each term is 1-2 concrete, filmable English words (e.g. 'wallet', 'cash counting', "
-        "'stock chart', 'worried woman'). No abstract ideas, no brand names.\n\n"
-        f"Script: {script}\n\nReply with only a JSON array of strings."))
-    return parse_topics(reply, [], 20)
+def ask_vision_factory(M):
+    """A function that shows images to Claude (through the logged-in Claude CLI) and returns its reply.
+    Only reads files in the folder it is given. Raises when the CLI isn't available."""
+    import json as _json
+    import subprocess
+    cli = (M.config.app.get("claude_code_cli_path") or "").strip() or shutil.which("claude")
+
+    def ask_vision(prompt, folder):
+        if not cli:
+            raise RuntimeError("the claude CLI isn't installed, so clips can't be checked visually")
+        env, _ = M.llm.build_claude_code_env()
+        r = subprocess.run([cli, "-p", "--output-format", "json", "--tools", "Read", "--safe-mode"],
+                           input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           cwd=str(folder), env=env, timeout=300)
+        payload = _json.loads((r.stdout or "").strip() or "{}")
+        if payload.get("is_error") or not payload.get("result"):
+            raise RuntimeError(str(payload.get("result") or r.stderr)[:200])
+        return payload["result"]
+    return ask_vision
 
 
-def add_tag_filter(material, original, llm, topic):
-    """Wrap MPT's Pixabay search: the LLM drops clips whose tags don't fit the term.
-    Needs the MPT patch that keeps Pixabay's `tags` (patches/mpt-material.patch)."""
-    def filtered(search_term, *args, **kwargs):
-        items = original(search_term, *args, **kwargs)
-        tagged = [i for i in items if (i.source_info or {}).get("tags")]
-        if not tagged:
-            return items
-        listing = "\n".join(f'{i.source_info["asset_id"]}: {i.source_info["tags"]}' for i in tagged)
-        reply = llm._generate_response(
-            f"A Shorts video about '{topic}' needs a stock clip for: '{search_term}'.\n"
-            "Each line is a clip id and its tags. Keep only clips that clearly show this. "
-            f"Reply with only a JSON array of kept ids.\n\n{listing}")
-        if reply.startswith("Error:"):
-            return items  # ponytail: filter failure keeps all clips rather than failing the video
-        keep = parse_ids(reply)
-        kept = [i for i in tagged if i.source_info["asset_id"] in keep]
-        print(f"Tag filter '{search_term}': kept {len(kept)}/{len(tagged)}")
-        return kept
-
-    material.search_videos_pixabay = filtered
+def plan_queries(ask_llm, topic, beats, lessons_text=""):
+    """Search words for every beat: a specific one and a broader fallback."""
+    lines = "\n".join(f'{i + 1}. ({e - s:.1f}s) "{txt}"' for i, (s, e, txt) in enumerate(beats))
+    reply = ask_llm(
+        f"Plan the stock footage for a fast, fun vertical YouTube Short about: {topic}.\n"
+        "Below are the voiceover beats in order. For EACH beat give two stock-video search queries: "
+        "a specific one and a broader fallback. Queries are 1-3 concrete, filmable English words that show "
+        "what the beat is about (e.g. 'cash counting', 'worried woman', 'shopping cart', 'stock chart'); no abstract "
+        "ideas, no brand names. Vary the shots so consecutive beats don't look alike.\n"
+        f"{lessons_text}\n\nBeats:\n{lines}\n\n"
+        'Reply with only a JSON array like [{"i": 1, "queries": ["cash counting", "money"]}, ...].')
+    qs = footage.parse_queries(reply, len(beats))
+    for i, (s, e, txt) in enumerate(beats):          # never leave a beat without something to search
+        if not qs[i]:
+            top = sorted(footage.words(txt), key=len, reverse=True)[:2]
+            qs[i] = [" ".join(top)] if top else ["city lights"]
+    return qs
 
 
-def pick_music(bgm_dir, s):
-    """Never let MPT choose music: its bundled 'random' songs triggered a Content ID block.
-    Use an approved track (copied into MPT's allowed bgm folder) or no music at all."""
-    SAFE_MUSIC.mkdir(exist_ok=True)
-    text = MUSIC_SOURCES.read_text(encoding="utf-8") if MUSIC_SOURCES.exists() else ""
-    tracks = approved_tracks(text, [p.name for p in SAFE_MUSIC.iterdir() if p.is_file()])
-    if not tracks:
-        print("Music: none (no approved tracks in safe_music/SOURCES.txt) - voice only")
-        return {"bgm_type": "none", "bgm_file": ""}, None
-    name = random.choice(tracks)
-    dest = Path(bgm_dir) / f"safe-{name}"
-    shutil.copyfile(SAFE_MUSIC / name, dest)
-    print(f"Music: {name} (approved)")
-    return {"bgm_type": "custom", "bgm_file": str(dest), "bgm_volume": float(s["music_volume"])}, name
+def build_searchers(M):
+    """The footage sources that are set up: Pixabay, Coverr (if you have a key) and your clip library."""
+    searchers = []
+    pix = M.config.app.get("pixabay_api_keys") or []
+    pix = pix if isinstance(pix, list) else [pix]
+    if pix:
+        searchers.append(("pixabay", lambda q, d: footage.search_pixabay(q, pix[0], d)))
+    cov = M.config.app.get("coverr_api_keys") or []
+    cov = cov if isinstance(cov, list) else [cov]
+    if cov:
+        searchers.append(("coverr", lambda q, d: footage.search_coverr(q, cov[0], d)))
+    lib, probes = footage.load_library(CLIPS), {}
+    if lib:
+        searchers.append(("library", lambda q, d: footage.search_library(lib, [q], probes, BASE / ".thumbs" / "clips", d)))
+    return searchers
 
 
-def render_one(mpt, s):
-    config, VideoParams, llm, tm, material, bgm = mpt
-    topic = pick_topic(llm, s)
-    script = llm.generate_script(video_subject=topic, language=s["language"],
-                                 video_script_prompt=s["script_rules"])
+def make_params(M, s, topic, script, with_music):
+    return M.VideoParams(
+        video_subject=topic, video_script=script, video_language=s["language"], voice_name=s["voice"],
+        voice_rate=float(s["voice_rate"]), video_aspect="9:16",
+        subtitle_position="center",          # bottom gets covered by the Shorts UI
+        font_name="BeVietnamPro-Bold.ttf", font_size=90, stroke_width=5,
+        bgm_type="custom" if with_music else "none", bgm_file="", bgm_volume=float(s["music_volume"]))
+
+
+def mix_final(M, s, topic, script, combined, audio, srt, out, track):
+    """Voiceover + captions + (optional approved) music on top of the picture track."""
+    path = SAFE_MUSIC / track if track else None
+    if path:   # the mixer keeps a music file's full length, so cut it to the video first
+        path = footage.fit_audio(path, footage.probe(combined)[0] + 0.1, Path(out).with_name("music_fit.mp3"))
+    ok = M.video.generate_video(
+        video_path=str(combined), audio_path=str(audio), subtitle_path=str(srt), output_file=str(out),
+        params=make_params(M, s, topic, script, bool(path)), bgm_file_override=str(path) if path else None)
+    if not Path(out).exists():
+        raise RuntimeError("final video was not created")
+    if path and not ok:
+        print("WARNING: the music could not be mixed in; the video is voice only")
+    return bool(path) and ok
+
+
+def render_one(M, s):
+    ask_llm = lambda prompt: ask(M.llm, prompt)           # noqa: E731
+    lessons = build_lessons(ask_llm)
+    applied = sum(len(v) for v in lessons.values())
+    if applied:
+        print(f"Lessons applied from your rejections: {applied} rule(s)")
+    topic = pick_topic(M.llm, s, lessons)
+    # MPT caps the script prompt at 2000 characters
+    script_prompt = f"{s['script_rules']}\n{lessons_block(lessons, 'script')}".strip()[:1900]
+    script = M.llm.generate_script(video_subject=topic, language=s["language"], video_script_prompt=script_prompt)
     if not script or script.startswith("Error"):
         raise RuntimeError(f"script failed: {script}")
-    terms = pick_terms(llm, script)
-    music, track = pick_music(bgm.uploaded_bgm_dir(create=True), s)
-    print("Topic:", topic, "| Search terms:", terms)
+    print("Topic:", topic)
 
-    original = material.search_videos_pixabay
-    add_tag_filter(material, original, llm, topic)
+    stem = f"{datetime.now():%Y%m%d-%H%M}-{slugify(topic)}"
+    work = WORK / stem
+    work.mkdir(parents=True, exist_ok=True)
     try:
-        result = tm.start(str(uuid4()), VideoParams(
-            video_subject=topic,
-            video_script=script,
-            video_terms=terms,
-            video_language=s["language"],
-            voice_name=s["voice"],
-            video_aspect="9:16",
-            video_source=config.app.get("video_source") or "pexels",
-            video_clip_duration=3,           # fast cuts keep viewers from swiping
-            match_materials_to_script=True,  # search clips per sentence
-            subtitle_position="center",      # bottom gets covered by the Shorts UI
-            font_name="BeVietnamPro-Bold.ttf",
-            font_size=90,
-            stroke_width=5,
-            **music,                         # approved track or none, never MPT's bundled songs
-        ))
-    finally:
-        material.search_videos_pixabay = original
-    videos = result.get("videos")
-    if not videos:
-        raise RuntimeError(f"render failed: {result.get('error')}")
+        # 1. Voiceover and its exact timing
+        tid = str(uuid4())
+        result = M.tm.start(tid, make_params(M, s, topic, script, False), stop_at="subtitle")
+        srt = result.get("subtitle_path")
+        audio = Path(M.utils.task_dir(tid)) / "audio.mp3"
+        if not srt or not audio.exists():
+            raise RuntimeError(f"voiceover failed: {result.get('error')}")
+        total = footage.probe(audio)[0]
+        beats = footage.make_beats(footage.parse_srt(Path(srt).read_text(encoding="utf-8")), total)
+        print(f"Voiceover {total:.1f}s -> {len(beats)} beats")
 
-    meta = llm.generate_social_metadata(video_subject=topic, video_script=script,
-                                        language=s["language"], platform="youtube_shorts")
+        # 2. Find, look at and place the footage
+        flessons = lessons_block(lessons, "footage")
+        queries = plan_queries(ask_llm, topic, beats, flessons)
+        searchers = build_searchers(M)
+        if not searchers:
+            raise RuntimeError("no footage source is set up (add a Pixabay key in Setup)")
+        cands = footage.gather(beats, queries, searchers)
+        ranked = footage.choose_with_vision(topic, beats, cands, ask_vision_factory(M), work, flessons)
+        cache = Path(M.config.root_dir) / "storage" / "cache_videos"
+        combined, used = footage.compose(beats, ranked, work, cache)
+
+        # 3. Music: the best-fitting approved track (or the one you fixed, or none)
+        track = choose_track(s, usable_tracks(), ask_llm, topic, script, recent_tracks())
+        print("Music:", track or "none (voice only)")
+
+        # 4. Final mix
+        shutil.copyfile(audio, work / "audio.mp3")
+        shutil.copyfile(srt, work / "subtitle.srt")
+        final = work / "final.mp4"
+        mix_final(M, s, topic, script, combined, work / "audio.mp3", work / "subtitle.srt", final, track)
+    except Exception:
+        shutil.rmtree(work, ignore_errors=True)
+        raise
+
+    social = M.llm.generate_social_metadata(video_subject=topic, video_script=script,
+                                            language=s["language"], platform="youtube_shorts")
     REVIEW.mkdir(exist_ok=True)
-    base = REVIEW / f"{datetime.now():%Y%m%d-%H%M}-{slugify(topic)}"
-    shutil.copyfile(videos[0], base.with_suffix(".mp4"))
-    base.with_suffix(".json").write_text(json.dumps({
+    shutil.copyfile(final, REVIEW / f"{stem}.mp4")
+    final.unlink(missing_ok=True)
+    (REVIEW / f"{stem}.json").write_text(json.dumps({
         "topic": topic,
-        "title": meta.get("title") or topic,          # editable in the GUI before approving
-        "description": meta.get("caption", ""),
-        "tags": meta.get("hashtags", []),
+        "title": social.get("title") or topic,           # editable in the app before approving
+        "description": social.get("caption", ""),
+        "tags": social.get("hashtags", []),
         "music": track or "none",
+        "credits": footage.credits_for([c["source"] for c in used]),
+        "clips": [c["id"] for c in used],
+        "lessons_applied": applied,
         "script": script,
         "rendered": datetime.now().isoformat(timespec="seconds"),
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     with HISTORY.open("a", encoding="utf-8") as f:
         f.write(topic + "\n")
-    print(f"READY FOR REVIEW: {base.with_suffix('.mp4')}")
-    return base.with_suffix(".mp4")
+    print(f"READY FOR REVIEW: {REVIEW / (stem + '.mp4')}")
+    return REVIEW / f"{stem}.mp4"
+
+
+def remix_music(M, stem, track):
+    """Swap the music of a video that's waiting for review or approval, without redoing the
+    footage: only the final mix is redone (about a minute). track=None means voice only."""
+    folder = next((f for f in (REVIEW, APPROVED) if pair(f, stem)[0].exists()), None)
+    work = WORK / stem
+    if folder is None:
+        raise RuntimeError("that video is not in review or approved any more")
+    if not all((work / n).exists() for n in ("combined.mp4", "audio.mp3", "subtitle.srt")):
+        raise RuntimeError("the working files for this video are gone (older videos can't change music)")
+    if track and track not in [n for n, _, _ in usable_tracks()]:
+        raise RuntimeError("that track isn't in the approved list")
+    meta = load_meta(folder, stem)
+    s = load_settings()
+    out = work / "remix.mp4"
+    mix_final(M, s, meta.get("topic", ""), meta.get("script", ""), work / "combined.mp4", work / "audio.mp3",
+              work / "subtitle.srt", out, track)
+    shutil.move(str(out), str(pair(folder, stem)[0]))
+    meta["music"] = track or "none"
+    pair(folder, stem)[1].write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    (THUMBS / f"{stem}.png").unlink(missing_ok=True)
+    print(f"REMIXED {stem} with {track or 'no music'}")
 
 
 # ---- Uploading -------------------------------------------------------------------
@@ -539,11 +840,13 @@ def upload_next(upload_post, svc):
     video, meta_file = pair(APPROVED, stem)
     meta = load_meta(APPROVED, stem)
     title = meta.get("title") or stem
+    # Footage sources that require a visible credit (Vidsplay, Coverr) are named in the description
+    description = "\n\n".join(x for x in [meta.get("description", "").strip(), *meta.get("credits", [])] if x)
     result = upload_post.cross_post_video(
-        video_path=str(video), title=meta.get("description") or title, platforms=["youtube"],
+        video_path=str(video), title=description or title, platforms=["youtube"],
         youtube_extra={
             "youtube_title": title,
-            "youtube_description": meta.get("description", ""),
+            "youtube_description": description,
             "tags": meta.get("tags", []),
             "privacyStatus": svc.youtube_privacy_status,
             "selfDeclaredMadeForKids": False,
@@ -556,6 +859,8 @@ def upload_next(upload_post, svc):
     if ok or unconfirmed:
         # Both count against the quota. Unconfirmed is never retried: it may already be live.
         move_pair(stem, APPROVED, POSTED if ok else CHECK)
+        if ok:
+            drop_work(stem)
         ledger = load_ledger()
         ledger.append({"time": datetime.now().isoformat(timespec="seconds"), "title": title,
                        "file": video.name, "status": status,
@@ -568,27 +873,28 @@ def upload_next(upload_post, svc):
 # ---- Entry points ------------------------------------------------------------------
 
 def load_mpt():
+    """MoneyPrinterTurbo's parts we use: the LLM, the voiceover, the final mix and Upload-Post."""
+    from types import SimpleNamespace
     from app.config import config
     from app.models.schema import VideoParams
-    from app.services import bgm, llm, material, upload_post
+    from app.services import llm, upload_post, video
     from app.services import task as tm
+    from app.utils import utils
     # Approval gate: MPT must never upload straight after rendering.
     config.app["upload_post_auto_upload"] = False
-    return config, VideoParams, llm, tm, material, bgm, upload_post
+    return SimpleNamespace(config=config, VideoParams=VideoParams, llm=llm, tm=tm, video=video,
+                           utils=utils, upload_post=upload_post)
 
 
 def run(mode):
     """mode: "run" (scheduled), "dry" or "render"."""
     s = load_settings()
     times = parse_times(s["run_times"])
-    config, VideoParams, llm, tm, material, bgm, upload_post = load_mpt()
-    mpt_dir = Path(config.root_dir)
+    M = load_mpt()
+    mpt_dir, upload_post = Path(M.config.root_dir), M.upload_post
     svc = upload_post.upload_post_service
     for d in (REVIEW, APPROVED, POSTED):
         d.mkdir(exist_ok=True)
-    if not patch_applied(mpt_dir):
-        print("WARNING: MPT patch missing (apply it in the Setup tab). "
-              "Footage may include animations and the tag filter is off.")
 
     now = datetime.now()
     due, why = upload_due(now, load_ledger(), int(s["monthly_uploads"]), times)
@@ -613,7 +919,7 @@ def run(mode):
 
     if mode == "render" or waiting < int(s["buffer"]):
         try:
-            record["rendered"] = render_one((config, VideoParams, llm, tm, material, bgm), s).name
+            record["rendered"] = render_one(M, s).name
         except Exception as e:
             record["errors"].append(f"render failed: {type(e).__name__}: {e}")
             print(f"RENDER FAILED: {type(e).__name__}: {e}")
@@ -639,9 +945,9 @@ def doctor():
         except Exception as e:
             report[name] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-    config, VideoParams, llm, tm, material, bgm, upload_post = load_mpt()
-    report["mpt"] = {"ok": True, "version": getattr(config, "project_version", "?"),
-                     "dir": str(config.root_dir), "patch": patch_applied(config.root_dir)}
+    M = load_mpt()
+    config, llm, upload_post = M.config, M.llm, M.upload_post
+    report["mpt"] = {"ok": True, "version": getattr(config, "project_version", "?"), "dir": str(config.root_dir)}
 
     def llm_check():
         ok, msg, secs = llm.test_connection()
@@ -649,14 +955,13 @@ def doctor():
                 "message": str(msg)[:300], "seconds": round(secs, 1)}
 
     def footage_check():
-        from app.models.schema import VideoAspect
-        source = config.app.get("video_source")
-        if source != "pixabay":
-            return {"ok": True, "source": source, "note": "only Pixabay is checked"}
-        # "ocean"/"people" reliably have vertical full-HD clips; this checks the key works.
-        count = sum(len(material.search_videos_pixabay(t, 3, VideoAspect.portrait))
-                    for t in ("ocean", "people"))
-        return {"ok": count > 0, "source": source, "sample_results": count}
+        sources = {}
+        for name, fn in build_searchers(M):
+            sources[name] = len(fn("ocean", 3) if name != "library" else [])
+        library = len(clip_entries())
+        return {"ok": any(v > 0 for v in sources.values()), "sample_results": sources, "library_clips": library,
+                "pixabay_key": bool(config.app.get("pixabay_api_keys")),
+                "coverr_key": bool(config.app.get("coverr_api_keys"))}
 
     def upload_check():
         svc = upload_post.upload_post_service
@@ -685,9 +990,67 @@ def self_test():
     reply = 'Sure!\n```json\n["Why rich people rent", "The latte myth", "why RICH people rent"]\n```'
     assert parse_topics(reply, [], 5) == ["Why rich people rent", "The latte myth"]
     assert parse_topics(reply, ["the latte myth"], 5) == ["Why rich people rent"]
-    assert parse_ids('Kept: ["12", 34]') == {"12", "34"}
-    src = "# c\nCalm.mp3 | YouTube Audio Library\nloose.mp3\nnotes.txt | x\ngone.mp3 | YTAL"
+    src = "# c\nCalm.mp3 | YouTube Audio Library | calm, soft\nloose.mp3\nnotes.txt | x\ngone.mp3 | YTAL"
     assert approved_tracks(src, ["calm.mp3", "loose.mp3", "notes.txt"]) == ["calm.mp3"]
+    assert parse_music_sources(src)[0] == ("Calm.mp3", "YouTube Audio Library", "calm, soft")
+
+    # music choice: modes, never an unlisted/absent track, avoids repeats, falls back when Claude fails
+    tr = [("a.mp3", "s", "calm"), ("b.mp3", "s", "energetic, fast"), ("c.mp3", "s", "upbeat")]
+    assert choose_track({"music_mode": "none"}, tr) is None and choose_track({"music_mode": "auto"}, []) is None
+    assert choose_track({"music_mode": "fixed", "music_track": "c.mp3"}, tr) == "c.mp3"
+    assert choose_track({"music_mode": "fixed", "music_track": "zzz.mp3"}, tr[:1]) == "a.mp3"   # missing -> auto
+    asked = []
+    pick_b = lambda p: (asked.append(p), '{"track": "b.mp3"}')[1]                              # noqa: E731
+    assert choose_track({"music_mode": "auto"}, tr, pick_b, "T", "script") == "b.mp3" and "energetic, fast" in asked[0]
+    assert choose_track({"music_mode": "auto"}, tr, pick_b, recent=("b.mp3",)) in ("a.mp3", "c.mp3")
+    assert choose_track({"music_mode": "auto"}, tr, lambda p: '{"track": "evil.mp3"}') in ("a.mp3", "b.mp3", "c.mp3")
+    assert choose_track({"music_mode": "auto"}, tr, lambda p: 1 / 0) in ("a.mp3", "b.mp3", "c.mp3")
+
+    # footage logic (pure)
+    srt = "1\n00:00:00,100 --> 00:00:02,000\nHello there,\n\n2\n00:00:02,000 --> 00:00:03,900\nfriend.\n\n" \
+          "3\n00:00:03,900 --> 00:00:09,800\nA long second sentence follows here."
+    segs = footage.parse_srt(srt)
+    assert segs[0] == (0.1, 2.0, "Hello there,") and len(segs) == 3
+    beats = footage.make_beats(segs, 10.0)
+    assert beats[0][0] == 0.0 and beats[-1][1] == 10.0 and all(a[1] == b[0] for a, b in zip(beats, beats[1:]))
+    assert beats[1][0] == 3.9                                   # the picture changes when the words do
+    assert [round(x, 2) for x in footage.cut_lengths(1.0)] == [1.0] and len(footage.cut_lengths(6.0)) == 2
+    assert footage.window(10, 3)[2] == 1.0 and footage.window(3.3, 4.2)[2] < 1.0 and footage.window(2, 4.2) is None
+    assert footage.credits_for(["Vidsplay", "Mixkit", "pixabay"]) == ["Footage: Vidsplay.com"]
+    assert footage.parse_queries('x [{"i": 2, "queries": ["Cash  Counting", "money"]}]', 2) == [[], ["cash counting", "money"]]
+    assert footage.parse_picks('{"1": [2, 9, 2, 1], "7": [1]}', {1: 3}) == {1: [2, 1]}
+    assert footage.pick_rendition({"large": {"url": "u", "height": 2160, "size": 5e6},
+                                   "medium": {"url": "u", "height": 1080, "size": 1e6}})[0] == "large"
+    fake = [("one", lambda q, d: [{"id": f"one:{q}", "dur": 9}]), ("bad", lambda q, d: 1 / 0)]
+    got = footage.gather([(0, 3, "x"), (3, 6, "y")], [["cash"], []], fake, log=lambda m: None, pause=0)
+    assert [c["id"] for c in got[0]] == ["one:cash"] and got[1]                  # failing source skipped, fallback used
+    try:
+        footage.gather([(0, 3, "x")], [["q"]], [("bad", lambda q, d: 1 / 0)], log=lambda m: None, pause=0)
+        raise AssertionError("gather should fail when no footage exists")
+    except RuntimeError:
+        pass
+
+    # real ffmpeg: cut two synthetic landscape clips to exact beat lengths, join, check size and time
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as t2:
+        t2 = Path(t2)
+        for name, src_ in (("a.mp4", "testsrc=size=1920x1080:rate=30"), ("b.mp4", "smptebars=size=1280x720:rate=30")):
+            r = footage.run([footage.ffmpeg_exe(), "-y", "-v", "error", "-f", "lavfi", "-i", f"{src_}:duration=6",
+                             "-c:v", "libx264", "-pix_fmt", "yuv420p", str(t2 / name)])
+            assert r.returncode == 0, r.stderr
+        ranked = {0: [{"id": "t:a", "path": str(t2 / "a.mp4"), "source": "x"}],
+                  1: [{"id": "t:b", "path": str(t2 / "b.mp4"), "source": "x"}]}
+        out, used = footage.compose([(0.0, 3.0, "a"), (3.0, 8.5, "b")], ranked, t2 / "w", t2 / "cache", log=lambda m: None)
+        dur, w, h = footage.probe(out)
+        assert (w, h) == (1080, 1920) and abs(dur - 8.5) < 0.25 and len(used) == 2, (dur, w, h)
+        # music is cut to the video's length (trimmed when long, looped when short)
+        tone = t2 / "tone.mp3"
+        r = footage.run([footage.ffmpeg_exe(), "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                         str(tone)])
+        assert r.returncode == 0, r.stderr
+        for secs in (2.0, 5.0):
+            fitted = footage.fit_audio(tone, secs, t2 / f"fit{secs}.mp3")
+            assert abs(footage.probe(fitted)[0] - secs) < 0.15, (secs, footage.probe(fitted))
     assert slugify("Why $9.99 tricks you!") == "why-9-99-tricks-you"
     assert parse_times(["19:00", "9:30", "19:00"]) == [(9, 30), (19, 0)]
     for bad in (["25:00"], [], ["x"]):
@@ -730,8 +1093,45 @@ def self_test():
             save_meta(APPROVED, "20261101-0900-a", " New ", "d", ["#a", " ", "#b"])
             assert load_meta(APPROVED, "20261101-0900-a")["tags"] == ["#a", "#b"]
             unapprove("20261101-0900-a")
-            reject("20261102-0900-b")
+            for bad in (("", ""), ("nonsense", ""), ("other", "  ")):   # a real reason is required
+                try:
+                    reject("20261102-0900-b", *bad)
+                    raise AssertionError(f"rejected without a reason: {bad}")
+                except ValueError:
+                    pass
+            assert stems(REVIEW) == ["20261101-0900-a", "20261102-0900-b"] and not FEEDBACK.exists()
+            (REVIEW / "20261102-0900-b.json").write_text(
+                '{"topic": "Why tax refunds feel free", "title": "T", "script": "s"}', encoding="utf-8")
+            reject("20261102-0900-b", "topic", "too generic, I want specific numbers")
             assert stems(REVIEW) == ["20261101-0900-a"] and not stems(APPROVED)
+            fb = load_feedback()
+            assert len(fb) == 1 and fb[0]["category"] == "topic" and fb[0]["topic"] == "Why tax refunds feel free"
+
+            # learning: bad/empty LLM output falls back to the raw notes; results are cached
+            assert parse_lessons('x {"topic": ["a", " "], "script": "oops", "extra": ["z"]}') == \
+                {"topic": ["a"], "script": [], "footage": []}
+            assert parse_lessons("no json here") == {"topic": [], "script": [], "footage": []}
+            calls = []
+
+            def llm_ok(prompt):
+                calls.append(prompt)
+                return '{"topic": ["Use concrete numbers in the topic"], "script": [], "footage": []}'
+            rules = build_lessons(llm_ok)
+            assert rules["topic"] == ["Use concrete numbers in the topic"] and len(calls) == 1
+            assert "too generic" in calls[0]
+            assert build_lessons(llm_ok) == rules and len(calls) == 1          # cached: no 2nd LLM call
+            (REVIEW / "20261101-0900-a.json").write_text('{"topic": "t2"}', encoding="utf-8")
+            reject("20261101-0900-a", "footage", "clips of animals in a money video")
+            assert fallback_lessons(load_feedback())["footage"] == ["clips of animals in a money video"]
+
+            def llm_bad(prompt):
+                raise RuntimeError("boom")
+            rules = build_lessons(llm_bad)                                      # new feedback, LLM down
+            assert rules["footage"] == ["clips of animals in a money video"]
+            assert rules["topic"] and "Why tax refunds feel free" in rules["topic"][0]
+            assert load_lessons()["based_on"] == 2
+            assert "Follow them strictly" in lessons_block(rules, "topic") and lessons_block(rules, "script") == ""
+            assert "FOOTAGE" in lessons_summary() and "2 rejection" in lessons_summary()
 
             # unconfirmed upload resolution
             CHECK.mkdir()
@@ -743,10 +1143,38 @@ def self_test():
             # music list add/remove
             track = Path(tmp) / "Calm.mp3"
             track.write_bytes(b"x")
-            add_track(track, "YouTube Audio Library")
-            assert music_entries() == [("Calm.mp3", "YouTube Audio Library", True)]
+            add_track(track, "YouTube Audio Library", "calm, soft")
+            assert music_entries() == [("Calm.mp3", "YouTube Audio Library", "calm, soft", True)]
+            assert usable_tracks() == [("Calm.mp3", "YouTube Audio Library", "calm, soft")]
             remove_track("Calm.mp3")
-            assert music_entries() == []
+            assert music_entries() == [] and usable_tracks() == []
+
+            # clip library: needs a source and tags; only listed + present clips count
+            clip = Path(tmp) / "Money Walk.mp4"
+            clip.write_bytes(b"x")
+            for bad in (("", "tags"), ("Mixkit", "")):
+                try:
+                    add_clip(clip, *bad)
+                    raise AssertionError("clip added without source/tags")
+                except ValueError:
+                    pass
+            add_clip(clip, "Vidsplay", "money, walking")
+            assert clip_entries() == [("Money Walk.mp4", "Vidsplay", "money, walking", True)]
+            assert [c["source"] for c in footage.load_library(CLIPS)] == ["Vidsplay"]
+            remove_clip("Money Walk.mp4")
+            assert clip_entries() == [] and not (CLIPS / "Money Walk.mp4").exists()
+
+            # work folders (kept so music can be swapped) are deleted with the video
+            (WORK / "v1").mkdir(parents=True)
+            (WORK / "v1" / "combined.mp4").write_bytes(b"x")
+            drop_work("v1")
+            assert not (WORK / "v1").exists()
+            # recent tracks come from the saved videos' metadata, newest first
+            (REVIEW / "r1.mp4").write_bytes(b"x")
+            (REVIEW / "r1.json").write_text('{"music": "x.mp3", "rendered": "2026-10-01T10:00:00"}', encoding="utf-8")
+            (REVIEW / "r2.mp4").write_bytes(b"x")
+            (REVIEW / "r2.json").write_text('{"music": "y.mp3", "rendered": "2026-10-02T10:00:00"}', encoding="utf-8")
+            assert recent_tracks(2) == ["y.mp3", "x.mp3"] and recent_tracks(1) == ["y.mp3"]
 
             # lock is exclusive while held, free afterwards
             with RunLock():
@@ -775,6 +1203,10 @@ def main(args):
     mode = "render" if "--render" in args else "run"
     try:
         with RunLock():
+            if "--remix" in args:             # --remix <video name> <track file or "none">
+                i = args.index("--remix")
+                remix_music(load_mpt(), args[i + 1], None if args[i + 2] == "none" else args[i + 2])
+                return 0
             return run(mode)
     except AlreadyRunning:
         print("Another run is in progress; skipping this one.")

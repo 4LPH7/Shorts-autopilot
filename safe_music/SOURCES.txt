@@ -1,6 +1,17 @@
 # Approved background music. Only tracks listed here AND present in this folder are used.
-# Format:  filename | source and license
+# Format:  filename | source and license | mood tags (optional; the app uses them to pick the best fit)
 # Add only tracks that need NO attribution and are free for monetized YouTube use,
 # e.g. YouTube Studio > Audio Library, filter "Attribution not required".
 # Example:
-# Warm Light.mp3 | YouTube Audio Library, attribution not required, downloaded 2026-10-26
+# Warm Light.mp3 | YouTube Audio Library, attribution not required, downloaded 2026-10-26 | calm, acoustic
+#
+# Mixkit Stock Music Free License (https://mixkit.co/license/), downloaded 2026-10-26.
+# Track pages: https://mixkit.co/free-stock-music/ (search the title). Tempo is an estimate.
+mixkit-1001-i-do.mp3 | Mixkit "I Do!" by Michael Ramir C., Mixkit Stock Music Free License | energetic, uplifting, confident, EDM, house, fast
+mixkit-1183-karma.mp3 | Mixkit "Karma" by Michael Ramir C., Mixkit Stock Music Free License | powerful, confident, EDM, dance-pop, sports, workout, fast
+mixkit-288-one-more-dance.mp3 | Mixkit "One More Dance" by Arulo, Mixkit Stock Music Free License | carefree, fun, confident, dance-pop, bright, fast
+mixkit-468-expressive-courage.mp3 | Mixkit "Expressive Courage" by Diego Nava, Mixkit Stock Music Free License | driving, positive, motivational, EDM, house, fast
+mixkit-473-talent-in-the-air.mp3 | Mixkit "Talent in the Air" by Diego Nava, Mixkit Stock Music Free License | driving, positive, melodic, EDM, house, upbeat
+mixkit-371-cat-walk.mp3 | Mixkit "Cat Walk" by Arulo, Mixkit Stock Music Free License | driving, techy, fashion, EDM, house, fast
+mixkit-1000-i-can-hear-your-heartbeat.mp3 | Mixkit "I Can Hear Your Heartbeat" by Michael Ramir C., Mixkit Stock Music Free License | powerful, confident, indie pop, motivational, workout, upbeat
+mixkit-33-motivating-mornings.mp3 | Mixkit "Motivating Mornings" by Ahjay Stelino, Mixkit Stock Music Free License | motivational, driving, propulsive, corporate, upbeat

@@ -17,3 +17,8 @@ safe_music/*
 
 __pycache__/
 *.pyc
+feedback.jsonl
+lessons.json
+work/
+clips/*
+!clips/SOURCES.txt
