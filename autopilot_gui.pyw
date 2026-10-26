@@ -310,8 +310,10 @@ class App:
         ttk.Button(bar, text="Open project folder", command=lambda: open_path(HERE)).pack(side="right")
         mid = ttk.Frame(f)
         mid.pack(fill="both", expand=True)
-        left = ttk.LabelFrame(mid, text="Upload calendar (this month and next)", padding=6)
+        left = ttk.LabelFrame(mid, text="Monthly uploads calendar", padding=6)
         left.pack(side="left", fill="both", expand=True, padx=(0, 4))
+        self.cal_summary = ttk.Label(left, text="", foreground="#333", wraplength=int(560 * self.f), justify="left")
+        self.cal_summary.pack(anchor="w", pady=(0, 6))
         fr, self.cal_tree = self.tree(left, ("When", "Video"), (150, 380), height=10)
         fr.pack(fill="both", expand=True)
         right = ttk.LabelFrame(mid, text="Recent runs", padding=6)
@@ -342,6 +344,7 @@ class App:
         small.config(text=f"{max(limit - used, 0)} free uploads left this month")
         self.quota_bar.config(maximum=max(limit, 1), value=min(used, limit))
 
+        times = []
         try:
             times = eng.parse_times(s["run_times"])
             _, month_end = eng.month_bounds(now)
@@ -367,6 +370,7 @@ class App:
                 video = "needs an approved video"
             rows.append((t.isoformat(), (t.strftime("%a %d %b %H:%M"), video)))
         self.fill(self.cal_tree, rows)
+        self.cal_summary.config(text=self.calendar_summary(now, ledger, limit, times, plan))
 
         big, small = self.card["queue"]
         big.config(text=f"{len(review)} to review")
@@ -399,6 +403,29 @@ class App:
             self.set_status("A run is in progress (started by the schedule).")
         elif not self.proc:
             self.set_status("Idle")
+
+    def calendar_summary(self, now, ledger, limit, times, plan):
+        """Two plain lines describing how the month is spread, from the same plan the calendar shows."""
+        if not times:
+            return "Run times are not set correctly (Settings tab)."
+        used = eng.used_this_month(ledger, now)
+        _, month_end = eng.month_bounds(now)
+        rest = [t for t in plan if t.month == now.month]
+        lines = [f"This month: {used} of {limit} used, {max(limit - used, 0)} left."]
+        if not rest:
+            lines.append("No uploads left this month.")
+            return "\n".join(lines)
+        days = sorted({t.date() for t in rest})
+        # A "full spread" is a month that starts fresh (uploads from the 1st week, most of the quota left).
+        if rest[0].day <= 7 and len(rest) >= limit - 1 and len(days) > 1:
+            gap = (days[-1] - days[0]).days / (len(days) - 1)
+            lines.append(f"Full spread: about one upload every {gap:.0f} days, "
+                         f"{rest[0]:%d %b} to {rest[-1]:%d %b}.")
+        else:
+            lines.append(f"Catching up: {len(rest)} left, "
+                         f"{rest[0]:%d %b %H:%M} to {rest[-1]:%d %b %H:%M}, "
+                         f"{len(times)} run times a day.")
+        return "\n".join(lines)
 
     def show_alerts(self, plan, approved):
         for w in self.alerts.winfo_children():

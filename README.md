@@ -109,7 +109,7 @@ This spreads uploads evenly and uses the whole free quota. Example with 10 uploa
 
 | Month | Uploads |
 |---|---|
-| A full month (November) | 3, 6, 9, 12, 15, 18, 21, 23, 26, 28: about every 3 days |
+| A full month (November) | 1, 4, 7, 10, 13, 16, 19, 22, 25, 28: about every 3 days (at 09:00) |
 | Joining late (9 left on 26 Oct) | 27 Oct, then 09:00 and 19:00 from 28 to 31 Oct |
 
 If nothing is approved when a slot comes, that slot is skipped and later slots catch up. It never goes over the monthly limit. On a paid Upload-Post plan, raise **Uploads per month** in Settings.
