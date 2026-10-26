@@ -1,0 +1,19 @@
+# Machine-specific and private data - never commit
+env.bat
+settings.json
+uploads.json
+topics_used.txt
+review/
+approved/
+posted/
+check/
+logs/
+.thumbs/
+*.mp4
+
+# Music files are licensed to you, not to the repo; keep only the list template
+safe_music/*
+!safe_music/SOURCES.txt
+
+__pycache__/
+*.pyc

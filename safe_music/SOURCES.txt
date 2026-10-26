@@ -1,0 +1,6 @@
+# Approved background music. Only tracks listed here AND present in this folder are used.
+# Format:  filename | source and license
+# Add only tracks that need NO attribution and are free for monetized YouTube use,
+# e.g. YouTube Studio > Audio Library, filter "Attribution not required".
+# Example:
+# Warm Light.mp3 | YouTube Audio Library, attribution not required, downloaded 2026-10-26
