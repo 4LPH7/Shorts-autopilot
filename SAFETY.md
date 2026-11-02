@@ -4,6 +4,9 @@
 - **Your approval first:** nothing is uploaded unless you approved it in the Review tab. MoneyPrinterTurbo's own auto-upload is forced off on every run, and the Setup tab warns if it's ever switched on.
 - **Music:** MoneyPrinterTurbo's bundled "random" songs are never used (one triggered a Content ID block from HAAWK). Only tracks in `safe_music/` that are also listed in `safe_music/SOURCES.txt` are used. With no approved tracks, videos are voice-only. Music volume stays low (0.12 by default).
 - **Footage:** real footage only (no animations), checked visually for relevance. Pixabay's license allows YouTube use, including monetized videos. Coverr (official API) and Vidsplay ask for a credit, so the description gets "Footage: Coverr (coverr.co)" or "Footage: Vidsplay.com" automatically when such a clip is used. Mixkit forbids bots, so Mixkit clips are only ever added by hand in the Clips tab.
+- **Sound effects:** whooshes, hits and risers are synthesised in `sound.py` from noise and sine waves. Nothing is downloaded or sampled, so no one else holds rights to them. Stock effects libraries (Pixabay's included) are a known source of false Content ID claims, so none are used.
+- **Voices:** narration comes from Microsoft's free neural voices through the same public service as the Edge browser's read-aloud, or from Kokoro (Apache-2.0) running on this PC. No voice is cloned from a real person.
+- **Other people's videos:** the app never downloads videos or audio from YouTube, TikTok or similar sites (no yt-dlp). Reusing someone else's footage or sound is how claims and strikes happen.
 - **AI label:** every upload is marked as AI-generated (YouTube's altered or synthetic content disclosure).
 - **Audience:** every upload is declared "not made for kids".
 - **No double posts:** a run lock stops two runs from overlapping, and an upload whose outcome is unclear goes to `check/`. It's never retried automatically.

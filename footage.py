@@ -99,6 +99,18 @@ def window(clip_len, need):
     return 0.0, clip_len, round(speed, 3)
 
 
+def cut_starts(beats):
+    """Start time of every cut in the finished video, in order (the first is 0). compose() cuts each beat into
+    cut_lengths(); sound effects and camera moves are planned against these."""
+    out = []
+    for start, end, _ in beats:
+        t = start
+        for length in cut_lengths(end - start):
+            out.append(round(t, 3))
+            t += length
+    return out
+
+
 def credits_for(sources):
     """Credit lines to add to the video description for the sources actually used."""
     text = " ".join(str(s).lower() for s in sources)
@@ -115,9 +127,9 @@ def ffmpeg_exe():
         return shutil.which("ffmpeg") or "ffmpeg"
 
 
-def run(cmd, timeout=600):
+def run(cmd, timeout=600, cwd=None):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, encoding="utf-8",
-                          errors="replace", stdin=subprocess.DEVNULL)
+                          errors="replace", stdin=subprocess.DEVNULL, cwd=cwd)
 
 
 def probe(path):
@@ -139,16 +151,17 @@ def fit_audio(src, seconds, dest):
     return dest
 
 
-def cut_filter(speed):
+def cut_filter(speed, camera=None):
+    """`camera` (optional) is a filter that moves the finished vertical picture; it runs before any slow-down."""
     f = f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H},setsar=1,fps={FPS}"
-    return f + (f",setpts=PTS/{speed}" if speed != 1.0 else "")
+    return f + (f",{camera}" if camera else "") + (f",setpts=PTS/{speed}" if speed != 1.0 else "")
 
 
-def render_cut(src, dest, start, read_len, speed):
+def render_cut(src, dest, start, read_len, speed, camera=None):
     """One vertical, silent, exactly-timed piece of a clip."""
     out_len = read_len / speed
     r = run([ffmpeg_exe(), "-y", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{read_len:.3f}", "-i", str(src),
-             "-vf", cut_filter(speed), "-t", f"{out_len:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast",
+             "-vf", cut_filter(speed, camera), "-t", f"{out_len:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast",
              "-crf", "19", "-pix_fmt", "yuv420p", str(dest)])
     if r.returncode or not Path(dest).exists():
         raise RuntimeError(f"ffmpeg cut failed: {r.stderr[-300:]}")
@@ -451,8 +464,9 @@ def vision_prompt(topic, items, lessons_text):
         'for example {"3": [2, 5], "4": []}. Use an empty list when no candidate fits.\n\nBeats:\n' + lines)
 
 
-def choose_with_vision(topic, beats, cands_per_beat, ask_vision, work, lessons_text="", chunk=5, log=print):
-    """{beat_index: ranked candidate list}. Falls back to search order when vision isn't available."""
+def choose_with_vision(topic, beats, cands_per_beat, ask_vision, work, lessons_text="", chunk=5, log=print, weak_out=None):
+    """{beat_index: ranked candidate list}. Falls back to search order when vision isn't available.
+    If `weak_out` is a list, the indices of beats where Claude found no fitting clip are appended to it."""
     sheets = Path(work) / "sheets"
     sheets.mkdir(parents=True, exist_ok=True)
     cache = Path(work) / "thumbs"
@@ -474,6 +488,8 @@ def choose_with_vision(topic, beats, cands_per_beat, ask_vision, work, lessons_t
             chosen = [cands_per_beat[i][n - 1] for n in picks.get(i + 1, [])]
             if not chosen:
                 log(f"Beat {i + 1}: nothing fits well, using the top search result")
+                if weak_out is not None:
+                    weak_out.append(i)
             rest = [c for c in cands_per_beat[i] if c not in chosen]
             ranked[i] = chosen + rest
     return ranked
@@ -481,8 +497,9 @@ def choose_with_vision(topic, beats, cands_per_beat, ask_vision, work, lessons_t
 
 # ---- Building the picture track ---------------------------------------------------------
 
-def compose(beats, ranked, work, cache_dir, log=print):
+def compose(beats, ranked, work, cache_dir, log=print, camera=None):
     """Cut one clip piece per beat slot, exactly as long as the voiceover needs, and join them.
+    `camera(index, seconds)` may return a filter that moves the picture of that cut (or None).
     Returns (combined_path, [candidates used])."""
     work, cache_dir = Path(work), Path(cache_dir)
     pieces_dir = work / "pieces"
@@ -506,7 +523,7 @@ def compose(beats, ranked, work, cache_dir, log=print):
                         s = cursor[c["id"]]               # reused clip: carry on, never replay the same moment
                     cursor[c["id"]] = s + read_len
                     dest = pieces_dir / f"{i + 1:02d}-{k + 1}.mp4"
-                    render_cut(path, dest, s, read_len, speed)
+                    render_cut(path, dest, s, read_len, speed, camera(len(pieces), read_len) if camera else None)
                     pieces.append(dest)
                     if c not in used:
                         used.append(c)

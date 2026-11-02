@@ -23,6 +23,7 @@ import random
 import re
 import shutil
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -31,26 +32,83 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import footage  # noqa: E402  (sits next to this file)
 
 DEFAULTS = {
-    "niche": "money psychology and surprising personal finance facts",
+    "niche": (
+        "Dark psychology of emotional persuasion and demographic manipulation — exposing how corporations, "
+        "algorithms, luxury brands, and gurus exploit our deepest primal fears, secret desires, and raw vulnerabilities. "
+        "The viral checklist of human emotional hooks:\n"
+        "• Men: Primal lust, hunger for power, respect, and terror of insignificance.\n"
+        "• Women: Unrealistic beauty standards, the dread of aging, craving emotional safety and adoration.\n"
+        "• Parents: Crushing parental guilt, chronic exhaustion, desperate protective instincts, and buying peace of mind.\n"
+        "• Kids: Pure wonder, boundless dreams, grand ambitions, and the intoxicating thrill of adventure.\n"
+        "• The Rich: Obsessive paranoia of losing wealth, capital preservation, insomnia over collapse, and desperately buying back time.\n"
+        "• The Poor / Broke: Suffocating financial anxiety, desperate hope, the seductive promise of get-rich-quick shortcuts, and reclaiming human dignity.\n"
+        "• The Old: Heartbreaking nostalgia, grief over lost youth, fighting physical decline, and the yearning for vitality and dignity.\n"
+        "• The Young: Burning status anxiety, FOMO, identity crises, rebellion against authority, and the terror of being ordinary.\n"
+        "• The Lonely: The deafening ache of isolation, the desperate hunger for belonging, acceptance, intimacy, and a tribe.\n"
+        "• The Sick: Agonizing vulnerability, fear of mortality, and grasping at miracles or relief at any financial cost.\n"
+        "• The Healthy: Silent paranoia of invisible illness, hypochondria, mortality anxiety, and the obsessive quest to cheat death.\n"
+        "• The Smart: Intellectual arrogance, impatience with the crowd, and an obsession with secret cheat codes, leverage, and unfair shortcuts.\n"
+        "• The Dumb / Insecure: Painful feelings of inadequacy, desperate craving for applause, ego validation, and illusory moral superiority.\n"
+        "• The Faithful: Cosmic dread of chaos, seeking refuge in absolute certainty, dogmatic belonging, and divine purpose.\n"
+        "• The Faithless / Skeptics: Cynical rebellion, the adrenaline rush of exposing hypocrisy, and uncovering forbidden taboo truths.\n"
+        "• Everyone: The brutal ticking clock of mortality — our desperate hunger to buy back stolen time, freedom, and autonomy.\n"
+        "Each video exposes the shocking psychological manipulation, emotional traps, and hidden marketing tactics behind why we buy, believe, crave, and obey."
+    ),
     "language": "en-US",
-    "voice": "en-US-GuyNeural-Male",    # lively and expressive; any voice from the Settings list works
+    "voice": "en-US-AndrewMultilingualNeural",   # warm and conversational; audition the others in Settings
+    "voice_engine": "edge",             # edge (Microsoft neural voices), kokoro (runs on this PC) or mpt (the old way)
+    "voice_master": True,               # warmth, presence and a gentle compressor, so a synthetic voice sounds recorded
+    "sfx_level": "subtle",              # sound effects: off, subtle (every other cut + big numbers) or full
                                         # (the "Multilingual" voices stall on the free Edge TTS service)
-    "voice_rate": 1.12,                 # 1.0 = normal; 1.12 is a bit fast and punchy
+    "voice_rate": 1.05,                 # 1.0 = normal; 1.05 is lively without rushing
     "script_rules": (
-        "Write 130-150 words (about 50 seconds when spoken fast). "
-        "Fun, energetic and conversational, like an excited friend sharing a surprising fact. "
-        "First sentence is a hook that creates a curiosity gap, no greetings. "
-        "Very short punchy sentences, contractions, a little humor. End with a question that invites comments."
+        "Write 150-165 words (about 63-69 seconds when spoken at this pace). "
+        "Intense, emotionally gripping, and razor-sharp—like revealing a forbidden psychological truth that hits right where it hurts. "
+        "First sentence is an irresistible curiosity hook exposing how our emotions are secretly manipulated, no greetings. "
+        "Fast, punchy sentences, raw emotional tension (fear, ambition, guilt, lust, hope), and vivid sensory language. "
+        "Unmask the hidden psychological trap with shocking clarity. "
+        "End with a provocative, debate-sparking question that compels viewers to comment."
     ),
     "monthly_uploads": 10,              # Upload-Post free plan; raise if you upgrade
+    "quota_reset_day": 25,              # day of the month Upload-Post resets the quota (1-28)
+    "meter_used": 0,                    # the calls/uploads shown on Upload-Post's meter...
+    "meter_date": "",                   # ...and the date you read it (ISO); used only if from this cycle
+    "upload_mode": "auto",              # auto = Upload-Post posts approved videos; manual = you upload them
     "run_times": ["09:00", "19:00"],    # Task Scheduler times; upload spacing uses them
     "buffer": 3,                        # videos to keep waiting for review/upload
     "music_mode": "auto",               # auto = AI picks the best-fitting approved track; fixed; none
     "music_track": "",                  # the track used when music_mode is "fixed"
     "music_volume": 0.2,                # a clearly audible bed, about 5 dB under the voice
     "clean_after_days": 14,             # delete MPT render caches older than this (0 = never)
+    "motion_level": "subtle",           # animated captions and camera moves: off, subtle or dynamic
+    "look": "clean",                    # one colour grade over every clip: clean, cinematic or warm
+    "accent_color": "#FFD60A",          # the single highlight colour (keywords and big numbers)
 }
+AUDIENCE_HOOKS = (
+    "Men: lust, respect, primal power, fear of insignificance; "
+    "Women: beauty, youth, emotional safety, craving adoration; "
+    "Parents: peace of mind, relief from crushing parental guilt, child protection; "
+    "Kids: grand dreams, limitless wonder, ambition, thrilling adventure; "
+    "Rich: safety, stability, paranoia of loss, buying back time; "
+    "Poor / Broke: desperate hope, escape from debt, desire to get rich quick, reclaiming dignity; "
+    "Old: youth, vitality, fighting decay, nostalgia, lasting legacy; "
+    "Young: status, identity, rebellion, burning fear of being ordinary; "
+    "Lonely: belonging, community, deep connection, ending isolation; "
+    "Sick: miracles, desperate hope, instant relief from agony; "
+    "Healthy: fear (of losing health), mortality anxiety, biohacking obsession; "
+    "Smart: shortcuts, unfair advantages, asymmetric leverage; "
+    "Dumb / Insecure: validation, ego flattery, illusion of moral superiority; "
+    "Faithful: certainty, divine purpose, dogmatic comfort; "
+    "Faithless: rebellion, unmasking hypocrisy, raw taboo truths; "
+    "Everyone: time, freedom, autonomy."
+)
 MUSIC_MODES = ("auto", "fixed", "none")
+VOICE_ENGINES = ("edge", "kokoro", "mpt")
+SFX_LEVELS = ("off", "subtle", "full")
+MOTION_LEVELS = ("off", "subtle", "dynamic")
+LOOKS = ("clean", "cinematic", "warm")
+# Quota cycle, copied from the settings by load_settings(). Tests set it explicitly.
+QUOTA = {"reset_day": 1, "meter_used": 0, "meter_date": None}
 
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
 HERE = Path(__file__).resolve().parent
@@ -59,11 +117,13 @@ HERE = Path(__file__).resolve().parent
 def set_base(base):
     """Point every data path at `base` (the project folder; tests use a temp dir)."""
     global BASE, SETTINGS, HISTORY, LOG_DIR, RUNS, LOCK, LEDGER, SAFE_MUSIC, MUSIC_SOURCES
-    global REVIEW, APPROVED, POSTED, CHECK, THUMBS, FEEDBACK, LESSONS, WORK, CLIPS, CLIPS_SOURCES
+    global REVIEW, APPROVED, POSTED, CHECK, THUMBS, FEEDBACK, LESSONS, WORK, CLIPS, CLIPS_SOURCES, UPLOAD_STATE, BACKUP
     BASE = Path(base)
     WORK = BASE / "work"                      # per-video leftovers that allow swapping the music later
     CLIPS = BASE / "clips"                    # your hand-downloaded clips (Mixkit, Vidsplay, ...)
     CLIPS_SOURCES = CLIPS / "SOURCES.txt"
+    UPLOAD_STATE = BASE / "upload_state.json" # why automatic uploads are paused, if they are
+    BACKUP = BASE / "backup"                  # originals kept before a fix (see fix_loudness)
     FEEDBACK = BASE / "feedback.jsonl"        # one line per rejected video: why you rejected it
     LESSONS = BASE / "lessons.json"           # rules distilled from the feedback (fed to the prompts)
     SETTINGS = BASE / "settings.json"
@@ -102,6 +162,8 @@ def load_settings():
     if SETTINGS.exists():
         saved = json.loads(SETTINGS.read_text(encoding="utf-8"))
         s.update({k: v for k, v in saved.items() if k in DEFAULTS})
+    QUOTA.update(reset_day=int(s["quota_reset_day"]), meter_used=int(s["meter_used"] or 0),
+                 meter_date=s["meter_date"] or None)
     return s
 
 
@@ -112,14 +174,35 @@ def save_settings(s):
         clean[k] = int(clean[k])
         if clean[k] < 0:
             raise ValueError(f"{k} can't be negative")
+    if not 1 <= int(clean["quota_reset_day"]) <= 28:
+        raise ValueError("the quota reset day must be between 1 and 28")
+    clean["quota_reset_day"] = int(clean["quota_reset_day"])
+    clean["meter_used"] = int(clean["meter_used"] or 0)
+    if clean["meter_used"] < 0:
+        raise ValueError("the meter reading can't be negative")
+    clean["meter_date"] = clean["meter_date"] or ""
     clean["music_volume"] = float(clean["music_volume"])
     clean["voice_rate"] = float(clean["voice_rate"])
     if not 0.7 <= clean["voice_rate"] <= 1.5:
         raise ValueError("voice speed must be between 0.7 and 1.5")
     if not 0 <= clean["music_volume"] <= 1:
         raise ValueError("music volume must be between 0 and 1")
+    if clean["upload_mode"] not in ("auto", "manual"):
+        raise ValueError("upload mode must be auto or manual")
     if clean["music_mode"] not in MUSIC_MODES:
         raise ValueError(f"music mode must be one of {MUSIC_MODES}")
+    if clean["voice_engine"] not in VOICE_ENGINES:
+        raise ValueError(f"voice engine must be one of {VOICE_ENGINES}")
+    if clean["sfx_level"] not in SFX_LEVELS:
+        raise ValueError(f"sound effects must be one of {SFX_LEVELS}")
+    clean["voice_master"] = bool(clean["voice_master"])
+    if clean["motion_level"] not in MOTION_LEVELS:
+        raise ValueError(f"motion must be one of {MOTION_LEVELS}")
+    if clean["look"] not in LOOKS:
+        raise ValueError(f"look must be one of {LOOKS}")
+    accent = str(clean["accent_color"])
+    if not (len(accent) == 7 and accent[0] == "#" and all(c in "0123456789abcdefABCDEF" for c in accent[1:])):
+        raise ValueError("the highlight colour must look like #FFD60A")
     SETTINGS.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
     return clean
 
@@ -139,14 +222,25 @@ def slots(after, until, times):
 
 
 def month_bounds(now):
-    start = datetime(now.year, now.month, 1)
-    end = (start + timedelta(days=32)).replace(day=1) - timedelta(seconds=1)
-    return start, end
+    """Start and end of the quota cycle containing `now`. The cycle resets on QUOTA["reset_day"]."""
+    d = QUOTA["reset_day"]
+    if now.day >= d:
+        start = datetime(now.year, now.month, d)
+    else:
+        prev = datetime(now.year, now.month, 1) - timedelta(days=1)
+        start = datetime(prev.year, prev.month, d)
+    nxt = datetime(start.year + (start.month == 12), start.month % 12 + 1, d)
+    return start, nxt - timedelta(seconds=1)
 
 
 def used_this_month(ledger, now):
+    """Uploads used in the current cycle. The meter reading counts when it was taken this cycle;
+    the higher of the two numbers is used, so the app never plans more than the meter allows."""
     start, _ = month_bounds(now)
-    return sum(datetime.fromisoformat(e["time"]) >= start for e in ledger)
+    count = sum(datetime.fromisoformat(e["time"]) >= start for e in ledger if not e.get("manual"))
+    if QUOTA.get("meter_date") and datetime.fromisoformat(QUOTA["meter_date"]) >= start:
+        return max(count, int(QUOTA.get("meter_used") or 0))
+    return count
 
 
 def upload_due(now, ledger, limit, times):
@@ -180,6 +274,107 @@ def plan_uploads(now, ledger, limit, times, until):
 
 
 # ---- Review queue (the GUI calls these) ----------------------------------------
+
+# ---- Upload mode: automatic through Upload-Post, or manual by you ---------------------------
+
+YOUTUBE_UPLOAD_URL = "https://www.youtube.com/upload"     # opens the Studio upload dialog when signed in
+
+
+def load_upload_state():
+    try:
+        return json.loads(UPLOAD_STATE.read_text(encoding="utf-8")) if UPLOAD_STATE.exists() else {}
+    except ValueError:
+        return {}
+
+
+def save_upload_state(state):
+    if state:
+        UPLOAD_STATE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    else:
+        UPLOAD_STATE.unlink(missing_ok=True)
+
+
+def clear_upload_block():
+    """You fixed whatever stopped Upload-Post (or want to try again): allow automatic uploads again."""
+    save_upload_state({})
+
+
+def classify_upload_error(error):
+    """"quota" (limit reached), "refused" (another HTTP 4xx: key or plan problem) or "transient"."""
+    text = (error or "").lower()
+    if re.search(r"\b(402|429)\b", text) or any(w in text for w in ("quota", "limit", "exceed", "upgrade")):
+        return "quota"
+    if re.search(r"\b4\d\d client error", text):
+        return "refused"
+    return "transient"
+
+
+def note_upload_result(status, error=None, now=None):
+    """Remember why automatic uploads should pause, so a failing upload isn't retried at every slot
+    (each retry could use up another of the few free API calls)."""
+    now = now or datetime.now()
+    if status == "posted":
+        save_upload_state({})
+        return
+    if status != "failed":
+        return
+    kind = classify_upload_error(error)
+
+    def stamp(t):
+        return t.isoformat(timespec="seconds")
+    if kind == "quota":
+        state = {"blocked_until": stamp(month_bounds(now)[1] + timedelta(seconds=1)), "failures": 0,
+                 "reason": "Upload-Post says the upload limit is reached"}
+    elif kind == "refused":
+        state = {"blocked_until": stamp(now + timedelta(hours=24)), "failures": 0,
+                 "reason": f"Upload-Post refused the upload ({(error or '')[:50]})"}
+    else:
+        failures = int(load_upload_state().get("failures", 0)) + 1
+        state = {"failures": failures}
+        if failures >= 2:
+            state.update(blocked_until=stamp(now + timedelta(hours=6)), reason="two uploads in a row failed")
+    save_upload_state(state)
+
+
+def effective_upload_mode(now, settings, ledger):
+    """("auto" | "manual", reason). Manual when you chose it, when this cycle's free uploads are used,
+    or while an Upload-Post refusal or repeated failure has paused automatic uploads."""
+    if settings.get("upload_mode") == "manual":
+        return "manual", "you chose manual uploads"
+    limit = int(settings["monthly_uploads"])
+    reset = month_bounds(now)[1] + timedelta(seconds=1)
+    if used_this_month(ledger, now) >= limit:
+        return "manual", f"this cycle's {limit} free uploads are used (they reset {reset:%d %b})"
+    state = load_upload_state()
+    until = state.get("blocked_until")
+    if until and datetime.fromisoformat(until) > now:
+        return "manual", f"{state.get('reason', 'paused')}; automatic uploads retry after {until[:16].replace('T', ' ')}"
+    return "auto", ""
+
+
+def upload_description(meta):
+    """The description sent to YouTube: your text, then the credits footage sources require."""
+    return "\n\n".join(x for x in [meta.get("description", "").strip(), *meta.get("credits", [])] if x)
+
+
+def manual_pack(stem):
+    """Everything needed to upload an approved video by hand."""
+    meta = load_meta(APPROVED, stem)
+    return {"stem": stem, "file": str(pair(APPROVED, stem)[0]), "title": meta.get("title") or stem,
+            "description": upload_description(meta), "topic": meta.get("topic", ""),
+            "tags": ", ".join(t.strip().lstrip("#") for t in meta.get("tags", []) if t.strip())}
+
+
+def mark_manual_uploaded(stem):
+    """You uploaded it yourself: file it as posted. Manual uploads never count against Upload-Post's quota."""
+    meta = load_meta(APPROVED, stem)
+    move_pair(stem, APPROVED, POSTED)
+    drop_work(stem)
+    ledger = load_ledger()
+    ledger.append({"time": datetime.now().isoformat(timespec="seconds"), "title": meta.get("title") or stem,
+                   "file": f"{stem}.mp4", "status": "posted", "manual": True, "request_id": None})
+    save_ledger(ledger)
+
 
 def stems(folder):
     """Video names (without extension) in a queue folder, oldest first."""
@@ -523,19 +718,28 @@ class AlreadyRunning(Exception):
 
 class RunLock:
     """Exclusive OS file lock held for a whole run; released automatically if the
-    process dies. Stops a manual run and a scheduled run from both uploading."""
+    process dies. Stops a manual run and a scheduled run from both uploading.
+    wait: seconds to keep retrying before giving up (one-time uploads must not be skipped)."""
+
+    def __init__(self, wait=0):
+        self.wait = wait
 
     def __enter__(self):
         import msvcrt
         import os
+        import time
         LOG_DIR.mkdir(exist_ok=True)
         self.fd = os.open(LOCK, os.O_RDWR | os.O_CREAT)
-        try:
-            msvcrt.locking(self.fd, msvcrt.LK_NBLCK, 1)
-        except OSError:
-            os.close(self.fd)
-            raise AlreadyRunning("another run is in progress")
-        return self
+        deadline = time.monotonic() + self.wait
+        while True:
+            try:
+                msvcrt.locking(self.fd, msvcrt.LK_NBLCK, 1)
+                return self
+            except OSError:
+                if time.monotonic() >= deadline:
+                    os.close(self.fd)
+                    raise AlreadyRunning("another run is in progress")
+                time.sleep(5)
 
     def __exit__(self, *exc):
         import msvcrt
@@ -637,7 +841,9 @@ def pick_topic(llm, s, lessons=None):
     used = HISTORY.read_text(encoding="utf-8").splitlines() if HISTORY.exists() else []
     reply = ask(llm, (
         f"Give 6 YouTube Shorts video topics for the niche: {s['niche']}. "
-        "Each topic is one specific, curiosity-driven idea in under 12 words. "
+        f"Draw from this viral psychological checklist mapping demographics to their deepest emotional hooks: {AUDIENCE_HOOKS} "
+        "Focus on strong emotional tension, curiosity gaps, and the psychological mechanisms behind what people crave, buy, and fear. "
+        "Each topic is one specific, curiosity-driven idea in under 12 words (e.g. 'Why luxury ads sell men status instead of cars', 'The multi-billion dollar emotion sold to guilty parents'). "
         f"Do not repeat or closely resemble these past topics: {used[-100:]}. "
         f"{lessons_block(lessons, 'topic')}\n"
         "Reply with only a JSON array of strings."))
@@ -728,7 +934,239 @@ def mix_final(M, s, topic, script, combined, audio, srt, out, track):
     return bool(path) and ok
 
 
+def voiceover(M, s, topic, script):
+    """MPT's voiceover step, plus the TTS word timing it produced (for captions that follow the voice).
+    Returns (sentence subtitle path, audio path, word-timing SRT text or "")."""
+    seen, real_tts = {}, M.voice.tts
+
+    def capture(*args, **kwargs):
+        seen["maker"] = real_tts(*args, **kwargs)
+        return seen["maker"]
+
+    M.voice.tts = capture
+    try:
+        tid = str(uuid4())
+        result = M.tm.start(tid, make_params(M, s, topic, script, False), stop_at="subtitle")
+    finally:
+        M.voice.tts = real_tts
+    srt = result.get("subtitle_path")
+    audio = Path(M.utils.task_dir(tid)) / "audio.mp3"
+    if not srt or not audio.exists():
+        raise RuntimeError(f"voiceover failed: {result.get('error')}")
+    words = ""
+    if seen.get("maker") is not None:
+        try:
+            out = audio.with_name("words.srt")
+            M.voice.create_subtitle(sub_maker=seen["maker"], text=script, subtitle_file=str(out), word_level=True)
+            words = out.read_text(encoding="utf-8") if out.exists() else ""
+        except Exception as err:
+            print(f"Word timing unavailable ({err}); captions will use estimated timing")
+    return srt, audio, words
+
+
+def voice_audio(work):
+    """The narration file of a video: audio.wav for the studio narration, audio.mp3 for older videos."""
+    work = Path(work)
+    return work / "audio.wav" if (work / "audio.wav").exists() else work / "audio.mp3"
+
+
+def narration(M, s, topic, script, work):
+    """Voiceover for a new video: the studio narration (voices.py: sentence-by-sentence, mastered, checked against the
+    script), or MoneyPrinterTurbo's own when that can't run. Always leaves subtitle.srt, words.srt and the audio file
+    in `work`. Returns (sentence srt path, audio path, quality report or None)."""
+    work = Path(work)
+    if s["voice_engine"] != "mpt":
+        try:
+            import voices
+            _, _, audio, qa = voices.make_voiceover(s, script, work)
+            if qa["worst_match"] < 0.6:
+                print(f"WARNING: the narration may not match the script (worst sentence {qa['worst_match']:.0%})")
+            return work / "subtitle.srt", audio, qa
+        except Exception as err:
+            print(f"Studio narration failed ({str(err)[:300]}); using MoneyPrinterTurbo's voiceover instead")
+    srt, audio, words = voiceover(M, s, topic, script)
+    shutil.copyfile(audio, work / "audio.mp3")
+    shutil.copyfile(srt, work / "subtitle.srt")
+    if words:
+        (work / "words.srt").write_text(words, encoding="utf-8")
+    return work / "subtitle.srt", work / "audio.mp3", None
+
+
+def camera_for(beats, s, seed):
+    """footage.compose's `camera` argument: a different gentle move for every cut, or None when motion is
+    off or this ffmpeg can't do it (checked on three synthetic frames)."""
+    level = s["motion_level"]
+    if level == "off":
+        return None
+    import motion                                          # lazy: uploads never need it
+    cuts = sum(len(footage.cut_lengths(e - b)) for b, e, _ in beats)
+    moves = motion.plan_moves(cuts, seed, level)
+    probe_filter = next((f for f in (motion.camera_filter(m, level, 1.0) for m in moves) if f), None)
+    if probe_filter:
+        r = footage.run([footage.ffmpeg_exe(), "-v", "error", "-f", "lavfi", "-i", f"color=c=gray:s={footage.W}x{footage.H}:d=0.3:r=30",
+                         "-vf", probe_filter, "-frames:v", "3", "-f", "null", "-"], timeout=60)
+        if r.returncode:
+            print(f"Camera moves unavailable in this ffmpeg ({r.stderr[-120:].strip()}); cuts stay still")
+            return None
+    return lambda i, seconds: motion.camera_filter(moves[i], level, seconds) if i < len(moves) else None
+
+
+def motion_final(M, s, script, work, out, track):
+    """Animated captions, one look and a ducked music mix in a single ffmpeg pass (see motion.py)."""
+    import motion
+    work = Path(work)
+    cache = work / "motion.json"
+    keywords = json.loads(cache.read_text(encoding="utf-8")).get("keywords") if cache.exists() else None
+    if keywords is None:
+        try:
+            keywords = motion.parse_keywords(ask(M.llm, motion.keyword_prompt(script)))
+        except Exception as err:
+            print(f"Keyword choice skipped ({err}); only numbers will be highlighted")
+            keywords = []
+    timing = work / "words.srt" if (work / "words.srt").exists() else work / "subtitle.srt"
+    total = footage.probe(voice_audio(work))[0]
+    font = Path(M.utils.font_dir()) / motion.FONT_FILE
+    ass, info = motion.make_plan(timing.read_text(encoding="utf-8"), total, keywords, s["accent_color"], font_file=font)
+    info["design"] = motion.check_ass(ass)
+    for problem in info["design"]:
+        print("Design check:", problem)
+    music = footage.fit_audio(SAFE_MUSIC / track, total + 0.1, work / "music_fit.mp3") if track else None
+    sfx = None
+    if s["sfx_level"] != "off" and (work / "cuts.json").exists():     # older videos have no cut list: no effects
+        import zlib
+        import sound
+        sfx, events = sound.sfx_track(work / "sfx.wav", total, json.loads((work / "cuts.json").read_text(encoding="utf-8")),
+                                      info["callouts"], s["sfx_level"], zlib.crc32(work.name.encode()))
+        info["sfx_events"] = len(events)
+    made = motion.render_final(work, ass, font, "motion.mp4", s["look"], music, s["music_volume"], sfx=sfx)
+    shutil.move(str(made), str(out))
+    cache.write_text(json.dumps({"keywords": keywords, **info, "estimated_timing": timing.name != "words.srt"},
+                                indent=2), encoding="utf-8")
+    return bool(track)
+
+
+def repair_footage(ask_llm, topic, beats, queries, ranked, weak, searchers, vision, work, lessons_text):
+    """One more try for the beats where no clip fit: fresh search words, new candidates, another look.
+    Returns (ranked, indices of the beats that are still weak)."""
+    sub = [beats[i] for i in weak]
+    tried = "\n".join(f'{n + 1}. "{sub[n][2]}" (already tried: {", ".join(queries[i])})' for n, i in enumerate(weak))
+    reply = ask_llm(
+        f"Stock footage for a fast vertical YouTube Short about: {topic}. For these voiceover beats no clip fit, so the "
+        "search words were wrong. Give THREE new, different search queries per beat: 1-3 concrete, common English words "
+        "naming what a camera would literally film (an object, a place, an action, a reaction), the kind of words stock "
+        "video sites use. No abstract ideas, brand names or quotes from the narration.\n"
+        f"{tried}\n\nReply with only a JSON array like [{{\"i\": 1, \"queries\": [\"a\", \"b\", \"c\"]}}].")
+    fresh = footage.parse_queries(reply, len(sub))
+    for n, q in enumerate(fresh):
+        if not q:
+            fresh[n] = [" ".join(sorted(footage.words(sub[n][2]), key=len, reverse=True)[:2]) or "city lights"]
+    new = footage.gather(sub, fresh, searchers)
+    still = []
+    got = footage.choose_with_vision(topic, sub, new, vision, Path(work) / "repair", lessons_text, weak_out=still)
+    left = []
+    for n, i in enumerate(weak):
+        if n in still or len(new[n]) < 2:                       # nothing to judge, or nothing fit again
+            left.append(i)
+        else:
+            ranked[i] = got[n] + [c for c in ranked[i] if c not in got[n]]
+    print(f"Footage repair: {len(weak) - len(left)} of {len(weak)} weak beat(s) fixed")
+    return ranked, left
+
+
+def quality_checks(video, work, narration=None, weak=()):
+    """Automatic checks on a finished video (qa.py). Returns the report, or None if they couldn't run: a failed
+    check only flags the video for you, it never blocks it. `weak` lists the beats with no strongly matching clip."""
+    try:
+        import qa
+        cache = Path(work) / "motion.json"
+        design = json.loads(cache.read_text(encoding="utf-8")).get("design", []) if cache.exists() else []
+        report = qa.check_video(video, narration, design, weak=weak)
+        print("Quality checks:", qa.summary(report))
+        for c in report["checks"]:
+            if not c["ok"]:
+                print(f"  - {c['name']}: {c['detail']}")
+        return report
+    except Exception as err:
+        print(f"Quality checks skipped ({type(err).__name__}: {str(err)[:150]})")
+        return None
+
+
+def fix_loudness(folders=None):
+    """Match the audio of videos made before the studio mix (about -19 LUFS) to YouTube's -14 LUFS, in review and
+    approved. The picture is copied untouched and the original is kept in backup/. A new file replaces the old one
+    only if it measures right, is as long as before and has a bit-identical picture; otherwise the video is left as
+    it was. Returns [(file name, LUFS before, LUFS after)]."""
+    import qa
+    import sound
+    lo, hi = qa.LIMITS["lufs"]
+    done = []
+    for folder in folders or (REVIEW, APPROVED):
+        for stem in stems(folder):
+            video, meta_file = pair(folder, stem)
+            before = qa.check_video(video)["measured"]
+            if before.get("lufs") is None or lo <= before["lufs"] <= hi:
+                continue
+            keep = BACKUP / folder.name
+            keep.mkdir(parents=True, exist_ok=True)
+            fixed = keep / f"{stem}.fixed.mp4"
+            try:
+                sound.normalize_video_audio(video, fixed)
+                after = qa.check_video(fixed)["measured"]
+                if not (lo <= after.get("lufs", -99) <= hi and abs(after["duration"] - before["duration"]) < 0.4
+                        and sound.picture_hash(fixed) == sound.picture_hash(video)):
+                    raise RuntimeError("the new file didn't measure right")
+                if not (keep / video.name).exists():
+                    shutil.copyfile(video, keep / video.name)          # the original stays recoverable
+                fixed.replace(video)
+            except Exception as err:
+                fixed.unlink(missing_ok=True)
+                print(f"Left as it was: {video.name} ({type(err).__name__}: {str(err)[:150]})")
+                continue
+            meta = load_meta(folder, stem)
+            meta["qa"] = quality_checks(video, WORK / stem, meta.get("narration"))
+            meta["audio_fixed"] = f"loudness matched to -14 LUFS (was {before['lufs']}); original kept in backup/{folder.name}/"
+            meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+            done.append((video.name, before["lufs"], after["lufs"]))
+            print(f"Fixed {video.name}: {before['lufs']} -> {after['lufs']} LUFS")
+    return done
+
+
+def finish_video(M, s, topic, script, work, out, track, fresh=False):
+    """The final mix. Videos made with motion graphics (and new ones, when motion is on) go through
+    motion_final; older videos keep MoneyPrinterTurbo's captions, and so does anything that goes wrong.
+    Returns True if music was mixed in."""
+    work = Path(work)
+    if s["motion_level"] != "off" and (fresh or (work / "motion.json").exists()):
+        try:
+            return motion_final(M, s, script, work, out, track)
+        except Exception as err:
+            print(f"Motion graphics failed ({type(err).__name__}: {str(err)[:300]}); using the plain mixer instead")
+    mixed = mix_final(M, s, topic, script, work / "combined.mp4", voice_audio(work), work / "subtitle.srt", out, track)
+    try:                                       # even the plain mixer's output gets YouTube's loudness
+        import sound
+        loud = Path(out).with_name("loud.mp4")
+        sound.normalize_video_audio(out, loud)
+        loud.replace(out)
+    except Exception as err:
+        print(f"Loudness match skipped ({type(err).__name__}: {str(err)[:120]})")
+    return mixed
+
+
+class Clock:
+    """Prints and records how long each stage of a render takes, so a slow step is easy to find."""
+
+    def __init__(self):
+        self.last, self.rows = time.time(), {}
+
+    def mark(self, name):
+        now = time.time()
+        self.rows[name] = round(now - self.last, 1)
+        self.last = now
+        print(f"[{name}] {self.rows[name]:.0f}s")
+
+
 def render_one(M, s):
+    clock = Clock()
     ask_llm = lambda prompt: ask(M.llm, prompt)           # noqa: E731
     lessons = build_lessons(ask_llm)
     applied = sum(len(v) for v in lessons.values())
@@ -736,26 +1174,25 @@ def render_one(M, s):
         print(f"Lessons applied from your rejections: {applied} rule(s)")
     topic = pick_topic(M.llm, s, lessons)
     # MPT caps the script prompt at 2000 characters
-    script_prompt = f"{s['script_rules']}\n{lessons_block(lessons, 'script')}".strip()[:1900]
+    script_prompt = (f"{s['script_rules']}\n"
+                     f"Demographic emotional hooks map: {AUDIENCE_HOOKS}\n"
+                     f"{lessons_block(lessons, 'script')}").strip()[:1900]
     script = M.llm.generate_script(video_subject=topic, language=s["language"], video_script_prompt=script_prompt)
     if not script or script.startswith("Error"):
         raise RuntimeError(f"script failed: {script}")
     print("Topic:", topic)
+    clock.mark("topic and script")
 
     stem = f"{datetime.now():%Y%m%d-%H%M}-{slugify(topic)}"
     work = WORK / stem
     work.mkdir(parents=True, exist_ok=True)
     try:
-        # 1. Voiceover and its exact timing
-        tid = str(uuid4())
-        result = M.tm.start(tid, make_params(M, s, topic, script, False), stop_at="subtitle")
-        srt = result.get("subtitle_path")
-        audio = Path(M.utils.task_dir(tid)) / "audio.mp3"
-        if not srt or not audio.exists():
-            raise RuntimeError(f"voiceover failed: {result.get('error')}")
+        # 1. Narration and its exact timing (per sentence for the footage, per word for the captions)
+        srt, audio, voice_qa = narration(M, s, topic, script, work)
         total = footage.probe(audio)[0]
         beats = footage.make_beats(footage.parse_srt(Path(srt).read_text(encoding="utf-8")), total)
         print(f"Voiceover {total:.1f}s -> {len(beats)} beats")
+        clock.mark("narration")
 
         # 2. Find, look at and place the footage
         flessons = lessons_block(lessons, "footage")
@@ -764,19 +1201,29 @@ def render_one(M, s):
         if not searchers:
             raise RuntimeError("no footage source is set up (add a Pixabay key in Setup)")
         cands = footage.gather(beats, queries, searchers)
-        ranked = footage.choose_with_vision(topic, beats, cands, ask_vision_factory(M), work, flessons)
+        vision, weak = ask_vision_factory(M), []
+        ranked = footage.choose_with_vision(topic, beats, cands, vision, work, flessons, weak_out=weak)
+        if weak:
+            try:
+                ranked, weak = repair_footage(ask_llm, topic, beats, queries, ranked, weak, searchers, vision, work, flessons)
+            except Exception as err:                         # the repair is a bonus: never lose the video over it
+                print(f"Footage repair skipped ({type(err).__name__}: {str(err)[:150]})")
+        clock.mark("footage search and picks")
         cache = Path(M.config.root_dir) / "storage" / "cache_videos"
-        combined, used = footage.compose(beats, ranked, work, cache)
+        combined, used = footage.compose(beats, ranked, work, cache, camera=camera_for(beats, s, stem))
+        clock.mark("cutting the clips")
 
         # 3. Music: the best-fitting approved track (or the one you fixed, or none)
         track = choose_track(s, usable_tracks(), ask_llm, topic, script, recent_tracks())
         print("Music:", track or "none (voice only)")
 
         # 4. Final mix
-        shutil.copyfile(audio, work / "audio.mp3")
-        shutil.copyfile(srt, work / "subtitle.srt")
+        (work / "cuts.json").write_text(json.dumps(footage.cut_starts(beats)), encoding="utf-8")
         final = work / "final.mp4"
-        mix_final(M, s, topic, script, combined, work / "audio.mp3", work / "subtitle.srt", final, track)
+        finish_video(M, s, topic, script, work, final, track, fresh=True)
+        clock.mark("final pass")
+        qa_report = quality_checks(final, work, voice_qa, [i + 1 for i in weak])
+        clock.mark("quality checks")
     except Exception:
         shutil.rmtree(work, ignore_errors=True)
         raise
@@ -792,6 +1239,13 @@ def render_one(M, s):
         "description": social.get("caption", ""),
         "tags": social.get("hashtags", []),
         "music": track or "none",
+        "motion": s["motion_level"] if (work / "motion.json").exists() else "off",
+        "look": s["look"],
+        "narration": {"engine": voice_qa["engine"], "voice": voice_qa["voice"], "match": voice_qa["mean_match"],
+                      "worst": voice_qa["worst_match"], "retried": voice_qa["retried"]} if voice_qa else {"engine": "mpt"},
+        "weak_beats": [i + 1 for i in weak],
+        "qa": qa_report,
+        "timings": clock.rows,
         "credits": footage.credits_for([c["source"] for c in used]),
         "clips": [c["id"] for c in used],
         "lessons_applied": applied,
@@ -811,16 +1265,16 @@ def remix_music(M, stem, track):
     work = WORK / stem
     if folder is None:
         raise RuntimeError("that video is not in review or approved any more")
-    if not all((work / n).exists() for n in ("combined.mp4", "audio.mp3", "subtitle.srt")):
+    if not all((work / n).exists() for n in ("combined.mp4", "subtitle.srt")) or not voice_audio(work).exists():
         raise RuntimeError("the working files for this video are gone (older videos can't change music)")
     if track and track not in [n for n, _, _ in usable_tracks()]:
         raise RuntimeError("that track isn't in the approved list")
     meta = load_meta(folder, stem)
     s = load_settings()
     out = work / "remix.mp4"
-    mix_final(M, s, meta.get("topic", ""), meta.get("script", ""), work / "combined.mp4", work / "audio.mp3",
-              work / "subtitle.srt", out, track)
+    finish_video(M, s, meta.get("topic", ""), meta.get("script", ""), work, out, track)
     shutil.move(str(out), str(pair(folder, stem)[0]))
+    meta["qa"] = quality_checks(pair(folder, stem)[0], work, meta.get("narration"))
     meta["music"] = track or "none"
     pair(folder, stem)[1].write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     (THUMBS / f"{stem}.png").unlink(missing_ok=True)
@@ -832,16 +1286,20 @@ def remix_music(M, stem, track):
 def upload_next(upload_post, svc):
     """Upload the oldest approved video. Returns (status, title, error);
     status is "posted", "unconfirmed", "failed" or "none" (nothing approved)."""
+    mode, why = effective_upload_mode(datetime.now(), load_settings(), load_ledger())
+    if mode == "manual":
+        print(f"MANUAL MODE: not uploading automatically ({why}). Use the Upload page in the app.")
+        return "manual", None, why
     queue = stems(APPROVED)
     if not queue:
-        print("UPLOAD DUE but nothing is approved. Approve a video in the Review tab to keep the schedule.")
+        print("UPLOAD DUE but nothing is approved. Approve a video in the Review page to keep the schedule.")
         return "none", None, None
     stem = queue[0]
     video, meta_file = pair(APPROVED, stem)
     meta = load_meta(APPROVED, stem)
     title = meta.get("title") or stem
     # Footage sources that require a visible credit (Vidsplay, Coverr) are named in the description
-    description = "\n\n".join(x for x in [meta.get("description", "").strip(), *meta.get("credits", [])] if x)
+    description = upload_description(meta)
     result = upload_post.cross_post_video(
         video_path=str(video), title=description or title, platforms=["youtube"],
         youtube_extra={
@@ -856,6 +1314,7 @@ def upload_next(upload_post, svc):
     error = str(result.get("error") or "")
     unconfirmed = "unconfirmed" in error
     status = "posted" if ok else "unconfirmed" if unconfirmed else "failed"
+    note_upload_result(status, error)
     if ok or unconfirmed:
         # Both count against the quota. Unconfirmed is never retried: it may already be live.
         move_pair(stem, APPROVED, POSTED if ok else CHECK)
@@ -877,12 +1336,12 @@ def load_mpt():
     from types import SimpleNamespace
     from app.config import config
     from app.models.schema import VideoParams
-    from app.services import llm, upload_post, video
+    from app.services import llm, upload_post, video, voice
     from app.services import task as tm
     from app.utils import utils
     # Approval gate: MPT must never upload straight after rendering.
     config.app["upload_post_auto_upload"] = False
-    return SimpleNamespace(config=config, VideoParams=VideoParams, llm=llm, tm=tm, video=video,
+    return SimpleNamespace(config=config, VideoParams=VideoParams, llm=llm, tm=tm, video=video, voice=voice,
                            utils=utils, upload_post=upload_post)
 
 
@@ -986,6 +1445,7 @@ def doctor():
 
 def self_test():
     import tempfile
+    QUOTA.update(reset_day=1, meter_used=0, meter_date=None)
 
     reply = 'Sure!\n```json\n["Why rich people rent", "The latte myth", "why RICH people rent"]\n```'
     assert parse_topics(reply, [], 5) == ["Why rich people rent", "The latte myth"]
@@ -1029,6 +1489,24 @@ def self_test():
         raise AssertionError("gather should fail when no footage exists")
     except RuntimeError:
         pass
+    # vision stage: beats where nothing fits are reported, and the repair pass finds them better clips
+    import tempfile as _tv
+    two = [[{"id": "a0", "source": "x"}, {"id": "a1", "source": "x"}], [{"id": "b0", "source": "x"}, {"id": "b1", "source": "x"}]]
+    weak = []
+    with _tv.TemporaryDirectory() as tv:
+        shot = [(0, 3, "x"), (3, 6, "y")]
+        ranked = footage.choose_with_vision("t", shot, two, lambda p, f: '{"1": [2], "2": []}', tv, log=lambda m: None, weak_out=weak)
+        assert weak == [1] and ranked[0][0]["id"] == "a1" and [c["id"] for c in ranked[1]] == ["b0", "b1"], (weak, ranked)
+        found = [("fake", lambda q, d: [{"id": f"n:{q}:{k}", "dur": 9, "source": "x"} for k in range(2)])]
+        ranked, left = repair_footage(lambda p: '[{"i": 1, "queries": ["red car", "road"]}]', "t", shot, [["q1"], ["q2"]],
+                                      ranked, [1], found, lambda p, f: '{"1": [2]}', tv, "")
+        assert left == [] and ranked[1][0]["id"].startswith("n:") and len(ranked[1]) > 2, (left, ranked[1])
+        ranked, left = repair_footage(lambda p: "no json", "t", shot, [["q1"], ["q2"]], ranked, [1], found,
+                                      lambda p, f: '{"1": []}', tv, "")
+        assert left == [1]                                            # still nothing fits: it stays flagged
+    clock = Clock()
+    clock.mark("a")
+    assert list(clock.rows) == ["a"] and clock.rows["a"] >= 0
 
     # real ffmpeg: cut two synthetic landscape clips to exact beat lengths, join, check size and time
     import tempfile as _tf
@@ -1051,6 +1529,65 @@ def self_test():
         for secs in (2.0, 5.0):
             fitted = footage.fit_audio(tone, secs, t2 / f"fit{secs}.mp3")
             assert abs(footage.probe(fitted)[0] - secs) < 0.15, (secs, footage.probe(fitted))
+    import os
+    import motion
+    font = Path(os.environ.get("MPT_DIR", "")) / "resource" / "fonts" / motion.FONT_FILE
+    motion.self_test(font if font.is_file() else None)
+    import narrate
+    import qa
+    import sound
+    import voices
+    qa.self_test()
+    sound.self_test()
+    assert [k for _, k in narrate.split_sentences("Your phone isn't dying. It's math! Does heat matter? Yes.\n\nSmall habits, big years.")] \
+        == [".", "!", "?", "p", "."]
+    assert narrate.clean_spoken("Hello \U0001F48D world [scene: x] (aside) wow — yes") == "Hello world wow, yes"
+    assert narrate.pause_after(".", 0, False) == narrate.HOOK_PAUSE and narrate.pause_after("?", 3, False) == 0.40 \
+        and narrate.pause_after(".", 5, True) == 0.0 and narrate.pause_after("!", 2, False, 0.5) == 0.13
+    heard = [("Your", 0, .2), ("phone", .2, .5), ("costs", .5, .9), ("eight", .9, 1.1), ("hundred", 1.1, 1.4),
+             ("dollars", 1.4, 1.7), ("today", 1.7, 2.0)]
+    times = narrate.map_words(["Your", "phone", "costs", "$800", "today"], heard)
+    assert times[0] == (0, .2) and times[4] == (1.7, 2.0) and times[3] == (0.9, 1.7), times      # the number is placed between its neighbours
+    assert narrate.spoken_match("It keeps 80% of its capacity", "it keeps eighty percent of its capacity") == 1.0
+    assert narrate.spoken_match("The cat sat on the mat", "a dog ran far away") < 0.3
+    assert voices.to_srt([(0, 1.5, "Hi there")]) == "1\n00:00:00,000 --> 00:00:01,500\nHi there\n\n"
+    assert voices.edge_name("en-US-GuyNeural-Male") == "en-US-GuyNeural" and voices.available("mpt") == (True, "")
+    if voices.available("kokoro")[0]:                 # the whole studio narration, offline: Kokoro + Whisper + mastering
+        with _tf.TemporaryDirectory() as t3:
+            try:                                      # an Edge voice name on the Kokoro engine is refused up front
+                voices.make_voiceover({**DEFAULTS, "voice_engine": "kokoro", "voice": "en-US-GuyNeural-Male"}, "Hi.", Path(t3))
+                raise AssertionError("a non-Kokoro voice was accepted")
+            except RuntimeError:
+                pass
+            _, _, wav, qa = voices.make_voiceover({**DEFAULTS, "voice_engine": "kokoro", "voice": "af_heart"},
+                                                  "Phones age fast. Heat is the reason.", Path(t3))
+            assert qa["sentences"] == 2 and qa["worst_match"] >= 0.8 and footage.probe(wav)[0] > 2.0, qa
+            assert len(footage.parse_srt((Path(t3) / "subtitle.srt").read_text(encoding="utf-8"))) == 2
+            assert len(footage.parse_srt((Path(t3) / "words.srt").read_text(encoding="utf-8"))) == 7
+    else:
+        print("(studio narration check skipped:", voices.available("kokoro")[1] + ")")
+    with _tf.TemporaryDirectory() as t4:              # fixing a quiet old video: backed up, verified, picture untouched
+        set_base(t4)
+        try:
+            APPROVED.mkdir(parents=True)
+            made = [("quiet", 0.03), ("fine_src", 0.02)]
+            for name, amp in made:
+                r = footage.run([footage.ffmpeg_exe(), "-y", "-v", "error", "-f", "lavfi", "-i",
+                                 "testsrc2=size=1080x1920:rate=30:d=8", "-f", "lavfi", "-i",
+                                 f"anoisesrc=d=8:c=pink:a={amp}:r=44100", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                                 "-shortest", str(Path(t4) / f"{name}.mp4")])
+                assert r.returncode == 0, r.stderr
+            shutil.copyfile(Path(t4) / "quiet.mp4", APPROVED / "quiet.mp4")
+            sound.normalize_video_audio(Path(t4) / "fine_src.mp4", APPROVED / "fine.mp4")      # already at the right level
+            for name in ("quiet", "fine"):
+                (APPROVED / f"{name}.json").write_text('{"title": "t"}', encoding="utf-8")
+            original = sound.picture_hash(APPROVED / "quiet.mp4")
+            done = fix_loudness((APPROVED,))
+            assert [d[0] for d in done] == ["quiet.mp4"] and -16 <= done[0][2] <= -12.5, done
+            assert (BACKUP / "approved" / "quiet.mp4").exists() and sound.picture_hash(APPROVED / "quiet.mp4") == original
+            assert "audio_fixed" in load_meta(APPROVED, "quiet") and fix_loudness((APPROVED,)) == []
+        finally:
+            set_base(HERE)
     assert slugify("Why $9.99 tricks you!") == "why-9-99-tricks-you"
     assert parse_times(["19:00", "9:30", "19:00"]) == [(9, 30), (19, 0)]
     for bad in (["25:00"], [], ["x"]):
@@ -1082,6 +1619,15 @@ def self_test():
                 raise AssertionError("bad time saved")
             except ValueError:
                 pass
+            for key, bad in (("motion_level", "wild"), ("look", "neon"), ("accent_color", "red"), ("accent_color", "#12345"),
+                             ("voice_engine", "robot"), ("sfx_level", "loud")):
+                try:
+                    save_settings({**DEFAULTS, key: bad})
+                    raise AssertionError(f"{key}={bad} saved")
+                except ValueError:
+                    pass
+            assert save_settings({**DEFAULTS, "motion_level": "dynamic", "look": "warm", "accent_color": "#00ff88"})["look"] == "warm"
+            SETTINGS.unlink()                      # leave the defaults for the checks below
 
             # queue moves keep .mp4 + .json together
             REVIEW.mkdir()
@@ -1180,6 +1726,14 @@ def self_test():
             with RunLock():
                 assert is_running()
             assert not is_running()
+            with RunLock():                              # a second lock waits, then gives up
+                try:
+                    with RunLock(wait=1):
+                        raise AssertionError("second lock acquired while the first is held")
+                except AlreadyRunning:
+                    pass
+            with RunLock(wait=1):
+                pass
 
             # cleanup only removes old entries
             cache = Path(tmp) / "storage" / "cache_videos"
@@ -1187,9 +1741,88 @@ def self_test():
             (cache / "old.mp4").write_bytes(b"12345")
             assert clean_mpt_cache(tmp, 14, now=datetime.now() + timedelta(days=15)) == 5
             assert clean_mpt_cache(tmp, 0) == 0
+
+            # Upload-Post cycle: resets on the 25th; the meter reading counts only if taken this cycle
+            QUOTA.update(reset_day=25, meter_used=0, meter_date=None)
+            assert month_bounds(datetime(2026, 11, 1, 10)) == (datetime(2026, 10, 25),
+                                                               datetime(2026, 11, 24, 23, 59, 59))
+            assert month_bounds(datetime(2026, 11, 25))[0] == datetime(2026, 11, 25)
+            assert month_bounds(datetime(2026, 12, 30))[0] == datetime(2026, 12, 25)
+            led = [{"time": "2026-10-26T11:15:33"}, {"time": "2026-10-20T09:00:00"}]
+            assert used_this_month(led, datetime(2026, 11, 1, 10)) == 1
+            QUOTA.update(meter_used=6, meter_date="2026-11-01")
+            assert used_this_month(led, datetime(2026, 11, 1, 10)) == 6
+            QUOTA.update(meter_date="2026-10-01")                  # taken in the previous cycle: ignored
+            assert used_this_month(led, datetime(2026, 11, 1, 10)) == 1
+            assert len(plan_uploads(datetime(2026, 11, 1, 10), [], 10, times, datetime(2026, 11, 24, 23))) == 10
+            QUOTA.update(reset_day=1, meter_used=0, meter_date=None)
+
+            # Upload mode: auto until the free uploads are used, Upload-Post refuses, or you choose manual
+            now2, s2 = datetime(2026, 11, 10, 12), dict(DEFAULTS)
+            few = [{"time": "2026-11-02T09:00:00"}]
+            full = [{"time": f"2026-11-0{i}T09:00:00"} for i in range(1, 10)] + [{"time": "2026-11-09T19:00:00"}]
+            assert effective_upload_mode(now2, s2, few)[0] == "auto"
+            assert effective_upload_mode(now2, {**s2, "upload_mode": "manual"}, few)[0] == "manual"
+            assert effective_upload_mode(now2, s2, full)[0] == "manual"
+            assert used_this_month(full[:4] + [{"time": "2026-11-09T09:00:00", "manual": True}] * 6, now2) == 4
+            assert classify_upload_error("429 Client Error: Too Many Requests") == "quota"
+            assert classify_upload_error("Monthly upload limit reached") == "quota"
+            assert classify_upload_error("403 Client Error: Forbidden for url: x") == "refused"
+            assert classify_upload_error("Read timed out") == "transient"
+            note_upload_result("failed", "Read timed out", now2)                      # one failure: keep going
+            assert effective_upload_mode(now2, s2, few)[0] == "auto"
+            note_upload_result("failed", "Read timed out", now2)                      # two in a row: pause
+            assert effective_upload_mode(now2, s2, few)[0] == "manual"
+            note_upload_result("posted", None, now2)
+            assert load_upload_state() == {}
+            note_upload_result("failed", "429 Client Error: Too Many Requests", now2)
+            assert load_upload_state()["blocked_until"].startswith("2026-12-01")
+            assert effective_upload_mode(now2, s2, few)[0] == "manual"
+            assert effective_upload_mode(datetime(2026, 12, 1, 0, 1), s2, few)[0] == "auto"   # the block ends at the reset
+            clear_upload_block()
+            assert load_upload_state() == {}
+            # a manual upload: credits are in the description, the file is filed as posted, the quota is untouched
+            APPROVED.mkdir(exist_ok=True)
+            (APPROVED / "m1.mp4").write_bytes(b"x")
+            (APPROVED / "m1.json").write_text(json.dumps({"title": "T", "description": "d", "tags": ["#a", "b"],
+                                                          "credits": ["Footage: Vidsplay.com"]}), encoding="utf-8")
+            pack = manual_pack("m1")
+            assert pack["description"] == "d\n\nFootage: Vidsplay.com" and pack["tags"] == "a, b"
+            mark_manual_uploaded("m1")
+            assert not (APPROVED / "m1.mp4").exists() and (POSTED / "m1.mp4").exists()
+            assert load_ledger()[-1]["manual"] is True and used_this_month(load_ledger(), datetime.now()) == 0
         finally:
+            QUOTA.update(reset_day=1, meter_used=0, meter_date=None)
             set_base(HERE)
     print("self-test passed")
+
+
+def upload_next_now():
+    """One upload, outside the normal spacing (used by the one-time upload tasks).
+    Still respects the monthly quota and the approval gate: only approved videos are posted."""
+    s = load_settings()
+    M = load_mpt()
+    svc = M.upload_post.upload_post_service
+    now = datetime.now()
+    used = used_this_month(load_ledger(), now)
+    limit = int(s["monthly_uploads"])
+    record = {"time": now.isoformat(timespec="seconds"), "mode": "upload-next", "upload_due": True,
+              "reason": f"{used}/{limit} used this cycle", "upload": None, "title": None,
+              "rendered": None, "errors": []}
+    if used >= limit:
+        record["note"] = "free uploads used: manual mode"
+    elif not (svc.is_configured() and "youtube" in svc.platforms):
+        record["errors"].append("Upload-Post is not enabled for YouTube")
+    else:
+        status, title, error = upload_next(M.upload_post, svc)
+        record.update(upload=status, title=title)
+        if status == "none":
+            record["errors"].append("nothing approved to upload")
+        elif status in ("failed", "unconfirmed"):
+            record["errors"].append(f"upload {status}: {error}")
+    record["exit"] = 1 if record["errors"] else 0
+    log_run(record)
+    return record["exit"]
 
 
 def main(args):
@@ -1200,6 +1833,30 @@ def main(args):
         return doctor()
     if "--dry-run" in args:
         return run("dry")
+    if "--audition" in args:                  # a mastered sample of each good free voice, to choose by ear
+        import voices
+        folder = BASE / "samples" / "voices"
+        made = voices.audition(folder, rate=float(load_settings()["voice_rate"]))
+        for label, path in made:
+            print(f"{label}: {path}")
+        print(f"{len(made)} samples in {folder}")
+        return 0 if made else 1
+    if "--fix-loudness" in args:              # old videos: match the audio to -14 LUFS (originals are kept in backup/)
+        try:
+            with RunLock():
+                done = fix_loudness()
+        except AlreadyRunning:
+            print("Another run is in progress; try again when it has finished.")
+            return 1
+        print(f"{len(done)} video(s) fixed")
+        return 0
+    if "--upload-next" in args:
+        try:
+            with RunLock(wait=3600):
+                return upload_next_now()
+        except AlreadyRunning:
+            print("Gave up after an hour waiting for the other run. Nothing was uploaded.")
+            return 1
     mode = "render" if "--render" in args else "run"
     try:
         with RunLock():

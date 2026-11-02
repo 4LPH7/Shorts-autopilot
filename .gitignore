@@ -22,3 +22,9 @@ lessons.json
 work/
 clips/*
 !clips/SOURCES.txt
+upload_state.json
+
+# voice auditions and other generated samples
+samples/
+.venv-audio/
+models/

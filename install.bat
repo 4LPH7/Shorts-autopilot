@@ -30,6 +30,21 @@ uv pip install --python .venv\Scripts\python.exe customtkinter==5.2.2 || (popd &
 popd
 
 echo.
+echo Setting up the narration tools (voices, speech check) in their own environment, .venv-audio ...
+pushd "%HERE%"
+if not exist ".venv-audio\Scripts\python.exe" (uv venv .venv-audio --python 3.11 || (popd & pause & exit /b 1))
+uv pip install --python .venv-audio\Scripts\python.exe kokoro-onnx soundfile faster-whisper edge-tts numpy || (popd & pause & exit /b 1)
+if not exist "models\kokoro" mkdir "models\kokoro"
+if not exist "models\kokoro\kokoro-v1.0.onnx" (
+    echo Downloading the Kokoro voice model, about 350 MB ...
+    curl -L --fail -o "models\kokoro\kokoro-v1.0.onnx" https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx || (popd & pause & exit /b 1)
+    curl -L --fail -o "models\kokoro\voices-v1.0.bin" https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin || (popd & pause & exit /b 1)
+)
+echo Downloading the Whisper speech model, about 460 MB ...
+.venv-audio\Scripts\python.exe -c "from faster_whisper import download_model; download_model('small.en', cache_dir='models/hf')" || (popd & pause & exit /b 1)
+popd
+
+echo.
 echo Done. Opening Shorts Autopilot - finish the Setup tab (keys, Upload-Post, schedule).
 call "%HERE%Shorts Autopilot.bat"
 endlocal

@@ -3,7 +3,7 @@
 Start it with "Shorts Autopilot.bat" (runs MPT's pythonw, so no console window).
 All automation rules live in daily_shorts.py; this file is only the interface.
     pythonw autopilot_gui.pyw                              # open the app
-    python  autopilot_gui.pyw --screenshot out.png [Page]  # build every page, save a screenshot, exit
+    python  autopilot_gui.pyw --screenshot out.png [Page [scroll 0-1]]  # build every page, save a screenshot, exit
 """
 
 import json
@@ -40,8 +40,28 @@ LLM_PROVIDERS = ["claude_code", "deepseek", "gemini", "openai", "openrouter", "o
 NO_KEY_PROVIDERS = {"claude_code", "ollama"}
 MUSIC_LABELS = {"auto": "Best fit for each video (AI picks)", "fixed": "Always the same track",
                 "none": "No music (voice only)"}
+UPLOAD_LABELS = {"auto": "Automatic (Upload-Post)", "manual": "Manual (I upload them)"}
+MOTION_LABELS = {"subtle": "Subtle (recommended)", "dynamic": "Dynamic (bigger camera moves)",
+                 "off": "Off (plain captions, still cuts)"}
+LOOK_LABELS = {"clean": "Clean", "cinematic": "Cinematic (soft vignette, light grain)", "warm": "Warm"}
+ENGINE_LABELS = {"edge": "Microsoft neural voices (free)", "kokoro": "Kokoro (runs on this PC)",
+                 "mpt": "MoneyPrinterTurbo (the old way)"}
+SFX_LABELS = {"subtle": "Subtle (recommended)", "full": "Full (every cut)", "off": "Off"}
+VOICE_CHOICES = {"edge": ["en-US-AndrewMultilingualNeural", "en-US-BrianMultilingualNeural", "en-US-AvaMultilingualNeural",
+                          "en-US-EmmaMultilingualNeural", "en-US-GuyNeural", "en-US-ChristopherNeural", "en-US-AriaNeural",
+                          "en-US-JennyNeural"],
+                 "kokoro": ["af_heart", "af_bella", "af_nova", "af_sky", "am_michael", "am_fenrir", "am_puck", "am_adam",
+                            "bf_emma", "bm_george"], "mpt": []}
+UPLOAD_STEPS = (
+    ("Open YouTube and copy the title",
+     "Opens YouTube's upload page, shows the video file in Explorer and copies the title. "
+     "Drag the file into YouTube, then press Ctrl+V in the title box."),
+    ("Copy the description", "Paste it into the description box (the footage credits are already included)."),
+    ("Copy the tags", "Paste them into the tags box (under Show more)."),
+    ("I uploaded it: mark as done", "Files the video as posted and moves on to the next one."),
+)
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-PAGES = ("Dashboard", "Review", "History", "Music", "Clips", "Settings", "Setup", "Logs")
+PAGES = ("Dashboard", "Review", "Upload", "History", "Music", "Clips", "Settings", "Setup", "Logs")
 
 # ---- Dark theme: warm near-black surfaces, one light accent, muted semantic tones ----------
 C = {
@@ -250,6 +270,7 @@ class App:
         self.task = {}
         self.doctor = {}
         self.current = None              # (folder, stem) shown in the Review detail panel
+        self.up_stem, self.up_pack, self.up_step = None, {}, 0     # video being uploaded by hand
         self.thumb_img = None
         self.page = None
         root.title("Shorts Autopilot")
@@ -413,6 +434,8 @@ class App:
             self.proc = None
             self.set_status(f"{self.proc_label} finished" + ("." if code == 0 else f" with problems (exit {code}). "
                                                               "See Logs."))
+            if self.proc_label == "Voice audition" and code == 0:     # the samples are what the user came for
+                os.startfile(str(HERE / "samples" / "voices"))
             self.refresh_all()
         self.root.after(200, self.poll_queue)
 
@@ -446,6 +469,7 @@ class App:
     def refresh_all(self, lists_only=False):
         self.refresh_dashboard()
         self.refresh_review_lists()
+        self.refresh_upload()
         self.refresh_history()
         self.refresh_music()
         self.refresh_clips()
@@ -504,7 +528,7 @@ class App:
         mid.grid_rowconfigure(0, weight=1)
         box, inner, _ = self.section(mid, "Monthly uploads calendar")
         box.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        self.cal_summary = label(inner, "", 13, C["muted"], wrap=380)
+        self.cal_summary = label(inner, "", 13, C["muted"], wrap=260)
         self.cal_summary.pack(anchor="w", pady=(0, 10))
         fr, self.cal_tree = self.table(inner, ("When", "Video"), (150, 330), height=9)
         fr.pack(fill="both", expand=True)
@@ -532,7 +556,8 @@ class App:
         used = eng.used_this_month(ledger, now)
         _, big, small = self.card["quota"]
         big.configure(text=f"{used} / {limit}")
-        small.configure(text=f"{max(limit - used, 0)} free uploads left in {now:%B}")
+        _, cyc_end = eng.month_bounds(now)
+        small.configure(text=f"{max(limit - used, 0)} free uploads left, resets {(cyc_end + timedelta(seconds=1)):%d %b}")
         self.quota_bar.set(min(used / max(limit, 1), 1))
 
         times = []
@@ -555,11 +580,19 @@ class App:
             small.configure(text="no upload slots planned")
             set_badge(self.next_badge, "none", "plain")
 
+        mode, why = eng.effective_upload_mode(now, s, ledger)
+        if mode == "manual":
+            big.configure(text="Manual")
+            small.configure(text=f"{len(approved)} ready for you to upload")
+            set_badge(self.next_badge, "open Upload" if approved else "nothing waiting", "warn" if approved else "plain")
+
         rows = []
         for i, t in enumerate(plan):
             video = ("ready: " + (eng.load_meta(eng.APPROVED, approved[i]).get("title") or approved[i])
                      if i < len(approved) else "needs an approved video")
             rows.append((t.isoformat(), (t.strftime("%a %d %b  %H:%M"), video)))
+        if mode == "manual":
+            rows = [("manual", ("Manual mode", f"you upload them: {why}"))]
         self.fill(self.cal_tree, rows)
         self.cal_summary.configure(text=self.calendar_summary(now, ledger, limit, times, plan))
 
@@ -595,14 +628,15 @@ class App:
         if not times:
             return "Run times are not set correctly (Settings)."
         used = eng.used_this_month(ledger, now)
-        rest = [t for t in plan if t.month == now.month]
-        lines = [f"This month: {used} of {limit} used, {max(limit - used, 0)} left."]
+        _, cyc_end = eng.month_bounds(now)
+        rest = [t for t in plan if t <= cyc_end]
+        lines = [f"This cycle: {used} of {limit} used, {max(limit - used, 0)} left."]
         if not rest:
             lines.append("No uploads left this month.")
             return "\n".join(lines)
         days = sorted({t.date() for t in rest})
         # A "full spread" is a month that starts fresh (uploads from the 1st week, most of the quota left).
-        if rest[0].day <= 7 and len(rest) >= limit - 1 and len(days) > 1:
+        if used <= 1 and len(rest) >= limit - 1 and len(days) > 1:
             gap = (days[-1] - days[0]).days / (len(days) - 1)
             lines.append(f"Full spread: about one upload every {gap:.0f} days, {rest[0]:%d %b} to {rest[-1]:%d %b}.")
         else:
@@ -614,7 +648,11 @@ class App:
         for w in self.alerts.winfo_children():
             w.destroy()
         alerts = []
-        if plan and not approved and plan[0] - datetime.now() < timedelta(hours=24):
+        mode, why = eng.effective_upload_mode(datetime.now(), eng.load_settings(), eng.load_ledger())
+        if mode == "manual" and approved:
+            alerts.append(("warn", "Manual upload", f"{len(approved)} approved video(s) wait for you to upload ({why}).",
+                           ("Open Upload", lambda: self.show("Upload"))))
+        if mode == "auto" and plan and not approved and plan[0] - datetime.now() < timedelta(hours=24):
             alerts.append(("bad", "Upload due", f"{plan[0]:%a %H:%M} needs an approved video. Approve one in Review.",
                            ("Open Review", lambda: self.show("Review"))))
         if eng.stems(eng.CHECK):
@@ -802,7 +840,13 @@ class App:
         set_badge(self.video_status, "approved, queued" if approved else "waiting for review", "ok" if approved else "warn")
         self.video_topic.configure(text=meta.get("topic", stem))
         credits = f"\nCredit: {'; '.join(meta['credits'])}" if meta.get("credits") else ""
-        self.video_info.configure(text=f"Music: {meta.get('music', '-')}\n"
+        qa = meta.get("qa")
+        checks = "not run (older video)" if not qa else "all passed" if qa.get("passed") else \
+            "to look at: " + ", ".join(c["name"] for c in qa["checks"] if not c["ok"])
+        nar = meta.get("narration") or {}
+        voice = nar.get("voice") if nar.get("engine") not in (None, "mpt") else "MoneyPrinterTurbo's"
+        self.video_info.configure(text=f"Voice: {voice}  ·  Music: {meta.get('music', '-')}\n"
+                                       f"Checks: {checks}\n"
                                        f"Footage: {len(meta.get('clips', []))} clips{credits}\n"
                                        f"Rendered {when(meta.get('rendered'))}  ·  {size}")
         self.approve_btn.configure(state="disabled" if approved else "normal")
@@ -971,6 +1015,167 @@ class App:
         self.clear_detail()
         self.refresh_all(lists_only=True)
 
+    # ---- Upload (manual mode) ----------------------------------------------------------------
+    def build_upload(self):
+        p = self.tabs["Upload"]
+        self.header(p, "Upload", "Upload approved videos yourself. One big button walks you through it.",
+                    actions=[("Retry automatic uploads", self.retry_auto, "ghost")])
+        banner = card(p)
+        banner.pack(fill="x", pady=(0, 12))
+        row = ctk.CTkFrame(banner, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=14)
+        self.mode_badge = badge(row, "-", "plain")
+        self.mode_badge.pack(side="left")
+        self.mode_text = label(row, "", 13, C["muted"], wrap=380)
+        self.mode_text.pack(side="left", padx=12)
+        self.mode_btn = button(row, "Always upload manually", self.toggle_upload_mode, "secondary", width=200)
+        self.mode_btn.pack(side="right")
+
+        body = ctk.CTkFrame(p, fg_color="transparent")
+        body.pack(fill="both", expand=True)
+        body.grid_columnconfigure(0, weight=4, uniform="up")
+        body.grid_columnconfigure(1, weight=7, uniform="up")
+        body.grid_rowconfigure(0, weight=1)
+        left, inner, _ = self.section(body, "Approved, oldest first")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        fr, self.up_tree = self.table(inner, ("#", "Title"), (36, 330), height=10)
+        fr.pack(fill="both", expand=True)
+        self.up_tree.bind("<<TreeviewSelect>>", lambda e: self.select_upload())
+        self.up_empty = label(inner, "", 12, C["muted"], wrap=240)
+        self.up_empty.pack(anchor="w", pady=(8, 0))
+
+        right = card(body)
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        top = ctk.CTkFrame(right, fg_color="transparent")
+        top.pack(fill="x", padx=20, pady=(18, 6))
+        self.up_title = label(top, "Select a video", 17, family=SERIF, wrap=470)
+        self.up_title.pack(anchor="w")
+        self.up_hint = label(top, "", 12, C["muted"], wrap=470)
+        self.up_hint.pack(anchor="w", pady=(4, 0))
+        self.up_main = button(right, "Select a video", self.advance_step, "primary", width=380)
+        self.up_main.pack(anchor="w", padx=20, pady=(4, 8))
+        sub = ctk.CTkFrame(right, fg_color="transparent")
+        sub.pack(anchor="w", padx=20)
+        button(sub, "Copy title", lambda: self.copy_field("title"), "secondary", width=92).pack(side="left")
+        button(sub, "Copy description", lambda: self.copy_field("description"), "secondary", width=132).pack(side="left", padx=8)
+        button(sub, "Copy tags", lambda: self.copy_field("tags"), "secondary", width=88).pack(side="left")
+        button(sub, "Show file", self.reveal_upload_file, "ghost", width=84).pack(side="left", padx=8)
+        form = ctk.CTkScrollableFrame(right, fg_color="transparent", scrollbar_button_color=C["border"])
+        form.pack(fill="both", expand=True, padx=12, pady=(10, 0))
+        label(form, "Description", 12, C["muted"]).pack(anchor="w", pady=(4, 2))
+        self.up_desc = textbox(form, 90)
+        self.up_desc.pack(fill="x")
+        label(form, "Tags", 12, C["muted"]).pack(anchor="w", pady=(10, 2))
+        self.up_tags = textbox(form, 40)
+        self.up_tags.pack(fill="x")
+        note = ctk.CTkFrame(form, fg_color=TONES["warn"][0], corner_radius=8)
+        note.pack(fill="x", pady=(14, 8))
+        label(note, "Also set these in YouTube's upload form (Upload-Post set them for you in automatic mode):\n"
+                    "- Altered or synthetic content: Yes (AI voice and generated scripts)\n"
+                    "- Made for kids: No\n"
+                    "- Visibility: your choice (automatic uploads use Public)", 12, TONES["warn"][1],
+              wrap=430).pack(anchor="w", padx=14, pady=10)
+
+    def refresh_upload(self):
+        s = eng.load_settings()
+        mode, why = eng.effective_upload_mode(datetime.now(), s, eng.load_ledger())
+        approved = eng.stems(eng.APPROVED)
+        if mode == "manual":
+            set_badge(self.mode_badge, "manual", "warn")
+            self.mode_text.configure(text=f"Automatic uploads are off: {why}.")
+        else:
+            set_badge(self.mode_badge, "automatic", "ok")
+            self.mode_text.configure(text="Upload-Post posts approved videos on schedule. You can still upload any "
+                                          "of them yourself below.")
+        self.mode_btn.configure(text="Use automatic uploads" if s["upload_mode"] == "manual" else "Always upload manually")
+        self.set_nav_count("Upload", len(approved) if mode == "manual" else 0)
+        self.fill(self.up_tree, [(st, (i + 1, eng.load_meta(eng.APPROVED, st).get("title") or st))
+                                 for i, st in enumerate(approved)])
+        self.up_empty.configure(text="" if approved else "Nothing approved yet. Approve videos on the Review page.")
+        if self.up_stem and self.up_stem not in approved:
+            self.up_stem, self.up_pack, self.up_step = None, {}, 0
+            self.update_step_ui()
+        if approved and not self.up_stem and not self.up_tree.selection():
+            self.up_tree.selection_set(approved[0])          # start on the next video: one click fewer
+
+    def select_upload(self):
+        sel = self.up_tree.selection()
+        if not sel or sel[0] == self.up_stem:
+            return
+        self.up_stem, self.up_step = sel[0], 0
+        self.up_pack = eng.manual_pack(sel[0])
+        set_text(self.up_desc, self.up_pack["description"], readonly=True)
+        set_text(self.up_tags, self.up_pack["tags"], readonly=True)
+        self.update_step_ui()
+
+    def update_step_ui(self):
+        if not self.up_stem:
+            self.up_title.configure(text="Select a video")
+            self.up_hint.configure(text="")
+            self.up_main.configure(text="Select a video", state="disabled")
+            set_text(self.up_desc, "", readonly=True)
+            set_text(self.up_tags, "", readonly=True)
+            return
+        title, hint = UPLOAD_STEPS[self.up_step]
+        self.up_title.configure(text=self.up_pack["title"])
+        self.up_hint.configure(text=hint)
+        self.up_main.configure(text=f"Step {self.up_step + 1} of {len(UPLOAD_STEPS)}: {title}", state="normal")
+
+    def advance_step(self):
+        if not self.up_stem:
+            return
+        if self.up_step == 0:
+            self.copy_field("title", quiet=True)
+            self.reveal_upload_file()
+            webbrowser.open(eng.YOUTUBE_UPLOAD_URL)
+            self.set_status("YouTube is opening. Drag the highlighted file in, then paste the title with Ctrl+V.")
+        elif self.up_step == 1:
+            self.copy_field("description")
+        elif self.up_step == 2:
+            self.copy_field("tags")
+        else:
+            return self.finish_upload()
+        self.up_step += 1
+        self.update_step_ui()
+
+    def copy_field(self, name, quiet=False):
+        if not self.up_stem:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.up_pack[name])
+        self.root.update()                                   # keeps the text on the clipboard after the app closes
+        if not quiet:
+            self.set_status(f"Copied the {name}.")
+
+    def reveal_upload_file(self):
+        if self.up_stem and Path(self.up_pack["file"]).exists():
+            subprocess.Popen(["explorer", f"/select,{os.path.normpath(self.up_pack['file'])}"])
+
+    def finish_upload(self):
+        if eng.is_running():
+            messagebox.showinfo("Busy", "A run is in progress and may be using this video. Try again in a minute.")
+            return
+        title = self.up_pack["title"]
+        eng.mark_manual_uploaded(self.up_stem)
+        self.up_stem, self.up_pack, self.up_step = None, {}, 0
+        self.set_status(f"Marked as uploaded: {title}")
+        self.refresh_all(lists_only=True)
+        kids = self.up_tree.get_children()
+        if kids:
+            self.up_tree.selection_set(kids[0])
+
+    def toggle_upload_mode(self):
+        s = eng.load_settings()
+        s["upload_mode"] = "auto" if s["upload_mode"] == "manual" else "manual"
+        eng.save_settings(s)
+        self.set_status("Uploads are now " + ("manual." if s["upload_mode"] == "manual" else "automatic."))
+        self.refresh_all(lists_only=True)
+
+    def retry_auto(self):
+        eng.clear_upload_block()
+        self.set_status("Automatic uploads are allowed again. The next run will try (the free quota still applies).")
+        self.refresh_all(lists_only=True)
+
     # ---- History -------------------------------------------------------------------------
     def build_history(self):
         p = self.tabs["History"]
@@ -1005,7 +1210,7 @@ class App:
 
     def refresh_history(self):
         ledger = eng.load_ledger()
-        self.fill(self.hist_tree, [(str(i), (when(e.get("time")), e.get("title", ""), e.get("status", ""),
+        self.fill(self.hist_tree, [(str(i), (when(e.get("time")), e.get("title", ""), e.get("status", "") + (" (manual)" if e.get("manual") else ""),
                                              e.get("request_id") or ""))
                                    for i, e in reversed(list(enumerate(ledger)))])
         self.fill(self.check_tree, [(s, (eng.load_meta(eng.CHECK, s).get("title") or s,))
@@ -1175,52 +1380,92 @@ class App:
                              ("Save settings", self.save_settings_form, "primary")])
         self.sv = {k: tk.StringVar() for k in ("niche", "language", "voice", "monthly_uploads", "run_times", "buffer",
                                                "music_volume", "clean_after_days", "privacy", "voice_rate",
-                                               "music_mode", "music_track")}
-        scroll = ctk.CTkScrollableFrame(p, fg_color="transparent", scrollbar_button_color=C["border"])
+                                               "music_mode", "music_track", "quota_reset_day", "meter_used", "upload_mode",
+                                               "motion_level", "look", "accent_color", "voice_engine", "sfx_level")}
+        self.master_var = tk.BooleanVar(value=True)
+        scroll = self.settings_scroll = ctk.CTkScrollableFrame(p, fg_color="transparent", scrollbar_button_color=C["border"])
         scroll.pack(fill="both", expand=True)
         scroll.grid_columnconfigure(0, weight=1)
         scroll.grid_columnconfigure(1, weight=1)
 
-        def form(parent):
+        def form(parent, wrap=420):
             f = ctk.CTkFrame(parent, fg_color="transparent")
             f.pack(fill="x")
             f.grid_columnconfigure(1, weight=1)
+            f.hint_wrap = wrap                  # narrow columns need shorter lines
             return f
 
         def field(f, row, title, widget, hint=""):
             label(f, title, 13).grid(row=row * 2, column=0, sticky="w", pady=(10, 0), padx=(0, 16))
             widget.grid(row=row * 2, column=1, sticky="we", pady=(10, 0))
             if hint:
-                label(f, hint, 11, C["faint"], wrap=420).grid(row=row * 2 + 1, column=1, sticky="w")
+                label(f, hint, 11, C["faint"], wrap=f.hint_wrap).grid(row=row * 2 + 1, column=1, sticky="w")
 
         box, inner, _ = self.section(scroll, "Content")
         box.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, 12))
         f = form(inner)
-        field(f, 0, "Niche", entry(f, self.sv["niche"], 520), "What every video is about.")
+        label(f, "Niche", 13).grid(row=0, column=0, sticky="nw", pady=(10, 0), padx=(0, 16))
+        self.niche_text = textbox(f, 110)
+        self.niche_text.grid(row=0, column=1, sticky="we", pady=(10, 0))
+        label(f, "What every video is about — psychological hooks, core theme, and emotional angles.", 11, C["faint"], wrap=520).grid(row=1, column=1, sticky="w")
         field(f, 1, "Language", entry(f, self.sv["language"], 120), "For example en-US.")
-        self.voice_box = combo(f, self.sv["voice"], [], 360)
-        field(f, 2, "Voice", self.voice_box, "Run the full check in Setup to fill this list. Avoid Multilingual voices.")
-        field(f, 3, "Voice speed", entry(f, self.sv["voice_rate"], 120), "1.0 is normal. 1.12 is a bit fast and lively.")
-        label(f, "Script rules", 13).grid(row=8, column=0, sticky="nw", pady=(10, 0))
+        label(f, "Script rules", 13).grid(row=8, column=0, sticky="nw", pady=(10, 0), padx=(0, 16))
         self.rules_text = textbox(f, 90)
         self.rules_text.grid(row=8, column=1, sticky="we", pady=(10, 0))
 
-        box, inner, _ = self.section(scroll, "Music")
-        box.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
-        f = form(inner)
+        left = ctk.CTkFrame(scroll, fg_color="transparent")
+        left.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
+        box, inner, _ = self.section(left, "Music")
+        box.pack(fill="x", pady=(0, 12))
+        f = form(inner, 230)
         field(f, 0, "Mode", option(f, self.sv["music_mode"], list(MUSIC_LABELS.values()), 300))
         self.track_box = option(f, self.sv["music_track"], [n for n, _, _ in eng.usable_tracks()], 300)
         field(f, 1, "Fixed track", self.track_box, "Only used with 'Always the same track'.")
-        field(f, 2, "Volume", entry(f, self.sv["music_volume"], 120), "0 to 1. 0.2 sits about 5 dB under the voice.")
+        field(f, 2, "Volume", entry(f, self.sv["music_volume"], 120),
+              "0 to 1. Music dips under the voice by itself, so it can be a little louder.")
+
+        box, inner, _ = self.section(left, "Narration and sound")
+        box.pack(fill="x", pady=(0, 12))
+        f = form(inner, 230)
+        field(f, 0, "Voice engine", option(f, self.sv["voice_engine"], list(ENGINE_LABELS.values()), 300,
+                                           command=lambda _v: self.update_voice_choices()),
+              "Free neural voices, or Kokoro running on this PC. The old way is the fallback.")
+        self.voice_box = combo(f, self.sv["voice"], [], 300)
+        field(f, 1, "Voice", self.voice_box, "Press Audition voices to hear ten of the best, then pick one.")
+        field(f, 2, "Voice speed", entry(f, self.sv["voice_rate"], 120), "1.0 is normal. 1.05 is lively without rushing.")
+        field(f, 3, "Studio sound", ctk.CTkSwitch(f, text="Master the voice", variable=self.master_var, font=font(13),
+                                                  text_color=C["text"], progress_color=C["primary"],
+                                                  button_color=C["text"], fg_color=C["field"]),
+              "Warmth, presence and a gentle compressor, so it sounds recorded.")
+        field(f, 4, "Sound effects", option(f, self.sv["sfx_level"], list(SFX_LABELS.values()), 300),
+              "Whooshes into cuts and a hit on big numbers, made from scratch.")
+        button(f, "Audition voices", lambda: self.start_run(["--audition"], "Voice audition"), "secondary",
+               width=200).grid(row=10, column=1, sticky="w", pady=(10, 0))
+
+        box, inner, _ = self.section(left, "Look and motion")
+        box.pack(fill="x")
+        f = form(inner, 230)
+        field(f, 0, "Motion", option(f, self.sv["motion_level"], list(MOTION_LABELS.values()), 300),
+              "Captions that follow the voice, a camera move on every cut, big numbers. Applies to new videos.")
+        field(f, 1, "Look", option(f, self.sv["look"], list(LOOK_LABELS.values()), 300),
+              "One colour grade over every clip so the video feels like one piece.")
+        field(f, 2, "Highlight colour", entry(f, self.sv["accent_color"], 120),
+              "The one accent colour, like #FFD60A. Used for a few keywords and big numbers.")
 
         box, inner, _ = self.section(scroll, "Uploads and schedule")
         box.grid(row=1, column=1, sticky="nsew", padx=(6, 0), pady=(0, 12))
-        f = form(inner)
+        f = form(inner, 200)
         field(f, 0, "Uploads a month", entry(f, self.sv["monthly_uploads"], 120), "Upload-Post free plan is 10.")
         field(f, 1, "Run times", entry(f, self.sv["run_times"], 200), "Comma separated, e.g. 09:00, 19:00.")
         field(f, 2, "Videos waiting", entry(f, self.sv["buffer"], 120), "Stop rendering at this many.")
         field(f, 3, "Clean cache after", entry(f, self.sv["clean_after_days"], 120), "Days. 0 means never.")
         field(f, 4, "YouTube privacy", option(f, self.sv["privacy"], ["public", "unlisted", "private"], 200))
+        field(f, 5, "Cycle resets on day", entry(f, self.sv["quota_reset_day"], 120),
+              "Day of the month Upload-Post resets your quota (1 to 28). Yours is the 25th.")
+        field(f, 6, "Calls used (meter)", entry(f, self.sv["meter_used"], 120),
+              "Type the number from Upload-Post's meter. The app uses the higher of this and its own count.")
+        field(f, 7, "Upload mode", option(f, self.sv["upload_mode"], list(UPLOAD_LABELS.values()), 260),
+              "Automatic switches to manual by itself when the free uploads run out.")
 
         box, inner, _ = self.section(scroll, "Schedule")
         box.grid(row=2, column=0, columnspan=2, sticky="nsew")
@@ -1233,13 +1478,35 @@ class App:
         button(row, "Resume", lambda: self.task_cmd("Enable"), "secondary").pack(side="right")
         button(row, "Pause", lambda: self.task_cmd("Disable"), "ghost").pack(side="right", padx=8)
 
+    def update_voice_choices(self):
+        """The voice list follows the engine; a voice that doesn't belong to the chosen engine is replaced."""
+        engine = {v: k for k, v in ENGINE_LABELS.items()}.get(self.sv["voice_engine"].get(), "edge")
+        names = VOICE_CHOICES[engine] or ((getattr(self, "doctor", None) or {}).get("voices") or {}).get("en_US") or []
+        self.voice_box.configure(values=names or [""])
+        now = self.sv["voice"].get().strip()
+        wrong = (engine == "kokoro" and not re.match(r"^[abefhijpz][fm]_", now)) or \
+                (engine == "edge" and "Neural" not in now)
+        if names and (wrong or not now):
+            self.sv["voice"].set(names[0])
+
     def load_settings_form(self):
         s = eng.load_settings()
-        for k in ("niche", "language", "voice", "monthly_uploads", "buffer", "music_volume", "clean_after_days",
+        set_text(self.niche_text, s["niche"])
+        for k in ("language", "voice", "monthly_uploads", "buffer", "music_volume", "clean_after_days",
                   "voice_rate", "music_track"):
             self.sv[k].set(str(s[k]))
         self.sv["run_times"].set(", ".join(s["run_times"]))
         self.sv["music_mode"].set(MUSIC_LABELS[s["music_mode"]])
+        self.sv["voice_engine"].set(ENGINE_LABELS[s["voice_engine"]])
+        self.sv["sfx_level"].set(SFX_LABELS[s["sfx_level"]])
+        self.master_var.set(bool(s["voice_master"]))
+        self.update_voice_choices()
+        self.sv["quota_reset_day"].set(str(s["quota_reset_day"]))
+        self.sv["upload_mode"].set(UPLOAD_LABELS[s["upload_mode"]])
+        self.sv["motion_level"].set(MOTION_LABELS[s["motion_level"]])
+        self.sv["look"].set(LOOK_LABELS[s["look"]])
+        self.sv["accent_color"].set(s["accent_color"])
+        self.sv["meter_used"].set(str(s["meter_used"]))
         set_text(self.rules_text, s["script_rules"])
         try:
             self.sv["privacy"].set(read_mpt_config().get("app", {}).get("upload_post_youtube_privacy_status", "public"))
@@ -1254,9 +1521,25 @@ class App:
 
     def save_settings_form(self):
         old = eng.load_settings()
-        new = {k: self.sv[k].get().strip() for k in ("niche", "language", "voice", "monthly_uploads", "buffer",
+        new = {k: self.sv[k].get().strip() for k in ("language", "voice", "monthly_uploads", "buffer",
                                                      "music_volume", "clean_after_days", "voice_rate", "music_track")}
+        new["niche"] = self.niche_text.get("1.0", "end").strip()
+        new["quota_reset_day"] = self.sv["quota_reset_day"].get().strip()
+        new["upload_mode"] = {v: k for k, v in UPLOAD_LABELS.items()}.get(self.sv["upload_mode"].get(), "auto")
+        new["motion_level"] = {v: k for k, v in MOTION_LABELS.items()}.get(self.sv["motion_level"].get(), "subtle")
+        new["look"] = {v: k for k, v in LOOK_LABELS.items()}.get(self.sv["look"].get(), "clean")
+        new["accent_color"] = self.sv["accent_color"].get().strip()
+        new["meter_used"] = self.sv["meter_used"].get().strip()
+        new["meter_date"] = old["meter_date"]
+        try:
+            if int(new["meter_used"]) != int(old["meter_used"]):   # a new reading is dated today
+                new["meter_date"] = datetime.now().date().isoformat()
+        except ValueError:
+            pass                                                   # save_settings reports the bad number
         new["music_mode"] = {v: k for k, v in MUSIC_LABELS.items()}.get(self.sv["music_mode"].get(), "auto")
+        new["voice_engine"] = {v: k for k, v in ENGINE_LABELS.items()}.get(self.sv["voice_engine"].get(), "edge")
+        new["sfx_level"] = {v: k for k, v in SFX_LABELS.items()}.get(self.sv["sfx_level"].get(), "subtle")
+        new["voice_master"] = bool(self.master_var.get())
         new["script_rules"] = self.rules_text.get("1.0", "end").strip()
         new["run_times"] = [t.strip() for t in self.sv["run_times"].get().split(",") if t.strip()]
         if new["music_track"] == "-":
@@ -1392,6 +1675,7 @@ class App:
         cell = row("schedule", "Daily schedule")
         button(line(cell), "Register or repair", self.register, "secondary").pack(side="left")
         row("claude", "Claude CLI")
+        row("narration", "Narration tools")
         row("webui", "MPT WebUI closed")
         cell = row("disk", "Disk space")
         f = line(cell)
@@ -1446,6 +1730,16 @@ class App:
                      (claude + ". Also used to look at clips.") if claude else
                      ("Not found. Install Claude Code, or pick another provider." if provider == "claude_code"
                       else "Not needed for this provider, but clips won't be checked visually."))
+        try:
+            import voices
+            engine = eng.load_settings()["voice_engine"]
+            ready, why = voices.available(engine)
+            self.set_row("narration", ready if engine != "mpt" else None,
+                         f"Ready: {ENGINE_LABELS[engine]}." if ready and engine != "mpt" else
+                         "Using MoneyPrinterTurbo's own voiceover (choose another engine in Settings)." if ready else
+                         f"{why}. Videos use MoneyPrinterTurbo's voice until it's fixed.")
+        except Exception as err:
+            self.set_row("narration", False, f"Couldn't check: {err}")
         running = webui_running()
         self.set_row("webui", not running, "It's open on port 8501. Close it: it rewrites config.toml."
                      if running else "Closed, so it can't overwrite settings.")
@@ -1478,9 +1772,7 @@ class App:
             self.doctor_label.configure(text=f"Check failed: {report}")
             return
         self.doctor = report
-        voices = (report.get("voices") or {}).get("en_US") or []
-        if voices:
-            self.voice_box.configure(values=voices)
+        self.update_voice_choices()
         bad = [k for k in ("mpt", "llm", "footage", "upload_post") if not (report.get(k) or {}).get("ok")]
         self.doctor_label.configure(text=f"Checked at {report.get('time', '')[11:16]}: "
                                          + ("everything works." if not bad else "problems with " + ", ".join(bad) + "."))
@@ -1614,6 +1906,9 @@ def main():
                     app.show(name)
                     root.update()
                 app.show(page)
+                if page == "Settings" and len(sys.argv) > i + 3:        # optional scroll position 0..1
+                    app.settings_scroll._parent_canvas.yview_moveto(float(sys.argv[i + 3]))
+                    root.update()
                 if page == "Review" and app.review_tree.get_children():
                     app.review_tree.selection_set(app.review_tree.get_children()[0])
                     root.update()

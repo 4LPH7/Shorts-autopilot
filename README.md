@@ -21,8 +21,10 @@ A dark-themed Windows app (CustomTkinter) that runs a faceless YouTube Shorts ch
 
 - **Topics never repeat.** An LLM (Claude by default) picks a fresh topic in your niche every time.
 - **Footage matches the script, to the second.** The voiceover is made first, so every sentence group ("beat") has exact timing. For each beat the app searches several free sources, then **Claude looks at the candidate clips as they will appear on a phone** and picks the best one for the words being spoken. Each clip is cut to the beat's exact length from the calm middle of the footage, so the picture changes when the words do. No clip repeats within a video. See [How clips are chosen](#how-clips-are-chosen).
-- **Fun, energetic and a bit fast:** an expressive voice at +12% speed, a punchy fun script style, and upbeat music chosen to fit each video.
-- **Readable captions:** bold font, large text, thick outline, centered so the Shorts UI doesn't cover them.
+- **Studio narration:** every sentence is spoken on its own with a chosen pause after it, mastered with warmth and presence, and **checked against the script by Whisper** so a garbled sentence is caught and redone. Free Microsoft neural voices (including the newest Multilingual ones) or Kokoro running offline on this PC. Hear ten of them first with **Audition voices**. See [Narration and sound](#narration-and-sound).
+- **Sound design:** whooshes into the cuts and a hit on big numbers, all synthesised here from noise and sine waves (nothing downloaded, so no Content ID risk), with music that ducks under the voice and a mix matched to YouTube's loudness.
+- **Checked before you look:** every video gets automatic quality checks (loudness, length, dead air, black or frozen picture, narration match, caption rules) and the Review page says what to look at.
+- **Motion graphics, not a slideshow:** captions that appear word by word exactly as the voice says them, a few keywords and big numbers in one accent colour, a different eased camera move on every cut (never zoom on every cut), one colour grade over all clips, and music that dips under the voice. Everything stays out of the screen areas the Shorts app covers. See [Look and motion](#look-and-motion).
 - **Copyright-safe music:** only tracks you've approved are used, otherwise voice only. 8 upbeat Mixkit tracks come ready to use. The AI picks the best fit for each video (or you fix one track, or swap the music per video in Review). See [SAFETY.md](SAFETY.md).
 - **Approval required:** nothing is posted until you approve it.
 - **Quota-aware schedule:** the remaining uploads are spread over the remaining run times of the month.
@@ -45,6 +47,7 @@ A dark-themed Windows app (CustomTkinter) that runs a faceless YouTube Shorts ch
 3. Double-click **`install.bat`**. It:
    - clones MoneyPrinterTurbo **v1.3.9** into `MPT_DIR` (skipped if it's already there)
    - installs Python 3.11 and MPT's packages with uv
+   - sets up the narration tools in their own environment (`.venv-audio`) and downloads the Kokoro and Whisper models (about 800 MB, once)
    - opens the app
 4. In the app, open the **Setup** tab and work down the checklist until every row is green ✔:
    - **Script writer:** choose `claude_code` (no key) or a provider and paste its key, then **Save**.
@@ -62,11 +65,12 @@ Later, open the app from the desktop shortcut or **`Shorts Autopilot.bat`**.
 | Tab | What you do there |
 |---|---|
 | **Dashboard** | Uploads used this month, the next upload slot, queue sizes, schedule state and the last run. **Alerts** flag anything that needs you, such as an upload due with nothing approved. The **upload calendar** shows every planned slot this month and next, and which approved video will go out. **Recent runs** shows each run's upload and render result. Buttons: Run now, Render one video now, Dry run. |
-| **Review** | Videos waiting for approval, each with a thumbnail, a ▶ Play button, the script, and an editable **YouTube title, description and tags**. **Approve** moves it to the upload queue. **Reject** asks *why* (a reason is required), deletes the video and keeps your reason to [teach future videos](#learning-from-your-rejections). **♪ Change music...** swaps the track of one video and redoes only the final mix (about a minute). The approved queue shows the upload order, and **Back to review** pulls one out. |
+| **Review** | Videos waiting for approval, each with a thumbnail, a ▶ Play button, the script, the voice used, the result of the automatic **quality checks** (*all passed* or what to look at), and an editable **YouTube title, description and tags**. **Approve** moves it to the upload queue. **Reject** asks *why* (a reason is required), deletes the video and keeps your reason to [teach future videos](#learning-from-your-rejections). **♪ Change music...** swaps the track of one video and redoes only the final mix (about a minute). The approved queue shows the upload order, and **Back to review** pulls one out. |
+| **Upload** | Your approved videos, ready to post by hand in four clicks: see [Manual uploads](#manual-uploads). Shows whether uploads are automatic or manual right now and why. |
 | **History** | Every upload (it counts against the quota), with status and Upload-Post request id. Uploads with an unclear outcome show under **Needs checking**: look in YouTube Studio, then mark **It's live** or **Not uploaded**. **Rejected videos** lists every rejection with your reason, and **What it learned...** shows the rules future videos follow. |
 | **Music** | Your approved tracks with their mood tags (the AI uses the tags to match a track to each video). **▶ Listen** plays one. **Add track...** asks for the source, mood tags and a license confirmation. No tracks means voice-only videos. |
 | **Clips** | Your own clip library: footage you download by hand from Mixkit, Vidsplay or Coverr. Add each with a source and a few tags, and the picker considers it whenever the tags match a scene. |
-| **Settings** | Niche, language, voice, **voice speed**, script rules, uploads per month, run times, number of videos to keep waiting, **music mode** (AI best fit / always one track / none), music volume, cache cleanup, YouTube privacy. Changing the run times re-registers the schedule. You can also pause or resume the schedule here. |
+| **Settings** | Niche, language, voice, **voice speed**, script rules, uploads per month, run times, number of videos to keep waiting, **music mode** (AI best fit / always one track / none), music volume, **narration and sound** (voice engine, voice, mastering, sound effects, an **Audition voices** button), **look and motion** (camera moves, colour grade, highlight colour), upload mode, quota cycle, cache cleanup, YouTube privacy. Changing the run times re-registers the schedule. You can also pause or resume the schedule here. |
 | **Setup** | Health checklist with a fix button on every row (see Install). |
 | **Logs** | The full run log, with a *Problems only* filter. |
 
@@ -114,6 +118,25 @@ This spreads uploads evenly and uses the whole free quota. Example with 10 uploa
 
 If nothing is approved when a slot comes, that slot is skipped and later slots catch up. It never goes over the monthly limit. On a paid Upload-Post plan, raise **Uploads per month** in Settings.
 
+## Manual uploads
+
+The free Upload-Post plan allows 10 uploads a cycle. When they run out nothing breaks: the app switches itself to **manual mode** and you post the approved videos yourself, in four clicks.
+
+**When it switches** (Settings → *Upload mode* = Automatic): the cycle's uploads are used up, or Upload-Post refuses uploads. A quota or limit error pauses automatic uploads until the next cycle; any other refusal pauses them for a day. Scheduled runs then skip the upload and say so in the log. Automatic uploads resume by themselves when the cycle resets (**Cycle resets on day**, the 25th for this account). To stay manual all the time, choose *Manual* in Settings or press **Always upload manually** on the Upload page.
+
+**The Upload page** lists the approved videos, oldest first. For the selected video one big button walks through four steps, always in the same place:
+
+| Step | What the button does | You |
+|---|---|---|
+| 1. Open YouTube and copy the title | copies the title, opens YouTube's upload page and shows the video file in Explorer | drag the file into YouTube, paste the title |
+| 2. Copy the description | copies the description, including any footage credits | paste it |
+| 3. Copy the tags | copies the tags | paste them under *Show more* |
+| 4. I posted it | moves the video to *Posted* and selects the next one | |
+
+A reminder under the button lists the two answers YouTube asks for: **altered or synthetic content = Yes** (the voice is AI) and **made for kids = No**. Manual uploads are written to the ledger as `manual`, so they never count against the Upload-Post quota.
+
+`schedule_uploads.ps1` registers one-time tasks that run `run_daily.bat --upload-next` at the times you give. It posts the oldest approved video (respecting the quota and the mode) and never renders anything.
+
 ## Files and folders
 
 ```
@@ -125,6 +148,15 @@ shorts-autopilot/
 ├─ autopilot_gui.pyw        the app (Tkinter)
 ├─ daily_shorts.py          the engine: schedule, queue, music, learning, uploads
 ├─ footage.py               finding, looking at and placing clips
+├─ voices.py                the narration step: runs the worker, masters the voice, writes the subtitle files
+├─ narrate.py               the narration worker (runs in .venv-audio): Edge or Kokoro, Whisper timing and check
+├─ sound.py                 voice mastering and the synthesised sound effects
+├─ qa.py                    automatic quality checks on every finished video
+├─ .venv-audio/  models/    the narration tools and their model files (install.bat sets them up; git-ignored)
+├─ samples/voices/          the voice audition (git-ignored)
+├─ backup/                  originals kept before a fix such as --fix-loudness (git-ignored)
+├─ motion.py                captions that follow the voice, camera moves, look, ducked mix
+├─ schedule_uploads.ps1     registers one-time "post the next approved video" tasks
 ├─ env.example.bat          → env.bat (your MPT folder; not committed)
 ├─ safe_music/SOURCES.txt   approved music list with mood tags (audio files are not committed)
 ├─ clips/SOURCES.txt        your own clip library list (video files are not committed)
@@ -136,7 +168,9 @@ shorts-autopilot/
 ├─ feedback.jsonl           why you rejected videos
 ├─ lessons.json             rules distilled from that feedback
 ├─ settings.json            your Settings tab values
-├─ work/<video>/            kept so the music of a waiting video can be swapped
+├─ upload_state.json        why automatic uploads are paused, if they are
+├─ work/<video>/            kept so the music of a waiting video can be swapped (also holds
+│                           words.srt, captions.ass and motion.json for videos made with motion)
 └─ logs/daily.log, logs/runs.jsonl, .thumbs/
 ```
 
@@ -146,11 +180,14 @@ Each video is an `.mp4` plus a `.json` with `topic`, `title`, `description`, `ta
 
 | Key | Default | Meaning |
 |---|---|---|
-| `niche` | money psychology and surprising personal finance facts | what every video is about |
+| `niche` | Dark psychology of emotional persuasion and demographic manipulation: the viral checklist of psychological hooks and raw emotional triggers behind why people buy and believe | what every video is about |
 | `language` | `en-US` | script and metadata language |
-| `voice` | `en-US-GuyNeural-Male` | Edge TTS voice (free). Avoid the "Multilingual" voices: they time out on the free service |
-| `voice_rate` | `1.12` | speaking speed (1.0 = normal) |
-| `script_rules` | 130–150 words, fun and energetic, hook first, end with a question | instructions for the script writer |
+| `voice_engine` | `edge` | `edge` (Microsoft neural voices, free, online), `kokoro` (runs on this PC) or `mpt` (MoneyPrinterTurbo's own voiceover, the fallback) |
+| `voice` | `en-US-AndrewMultilingualNeural` | an Edge voice name, or a Kokoro voice such as `af_heart` (press **Audition voices** to hear ten) |
+| `voice_rate` | `1.05` | speaking speed (1.0 = normal) |
+| `voice_master` | `true` | warmth, presence and a gentle compressor on the voice |
+| `sfx_level` | `subtle` | sound effects: `off`, `subtle` (every other cut and big numbers) or `full` (every cut, an intro and a riser) |
+| `script_rules` | 150–165 words (about 63–69 seconds), intense emotional curiosity hook, punchy psychological revelation, end with a provocative question | instructions for the script writer |
 | `monthly_uploads` | `10` | Upload-Post plan limit |
 | `run_times` | `["09:00", "19:00"]` | when the task runs |
 | `buffer` | `3` | stop rendering once this many videos are waiting |
@@ -158,6 +195,35 @@ Each video is an `.mp4` plus a `.json` with `topic`, `title`, `description`, `ta
 | `music_track` | empty | the track used when `music_mode` is `fixed` |
 | `music_volume` | `0.2` | background music level |
 | `clean_after_days` | `14` | delete MPT caches older than this (0 = never) |
+| `upload_mode` | `auto` | `auto` posts through Upload-Post and switches to manual when the quota is used up; `manual` never posts by itself |
+| `quota_reset_day` | `25` | day of the month Upload-Post resets the quota |
+| `meter_used` | `0` | the number from Upload-Post's usage meter (the app uses the higher of this and its own count) |
+| `motion_level` | `subtle` | `off`, `subtle` or `dynamic`: animated captions and camera moves |
+| `look` | `clean` | `clean`, `cinematic` or `warm` colour grade |
+| `accent_color` | `#FFD60A` | the one highlight colour for keywords and big numbers |
+
+### Dark Psychology & Emotional Persuasion Matrix
+
+The default niche explores the viral psychological checklist popularized on social media, mapping different demographics to their raw emotional hooks and psychological vulnerabilities:
+
+- **Men** — Lust, respect, primal power, terror of insignificance
+- **Women** — Beauty standards, youth, emotional safety, craving adoration
+- **Parents** — Peace of mind, serenity, relief from crushing parental guilt, fierce child protection
+- **Kids** — Limitless dreams, grand ambitions, pure wonder, thrilling adventure
+- **The Rich** — Safety, stability, paranoia of loss, buying back stolen time
+- **The Poor / Broke** — Desperate hope, escape from debt, desire to get rich quick, reclaiming dignity
+- **The Old** — Youth, vitality, fighting decay, heartbreak of aging, lasting legacy
+- **The Young** — Status, identity, rebellion, FOMO, burning fear of being ordinary
+- **The Lonely** — Belonging, community, intimacy, ending the ache of isolation
+- **The Sick** — Miracles, desperate hope, instant relief from agony and mortality
+- **The Healthy** — Fear of losing health, silent paranoia of illness, biohacking longevity
+- **The Smart** — Shortcuts, asymmetric leverage, unfair advantages, hacking the system
+- **The Dumb / Insecure** — Flattery, validation, ego soothing, illusion of moral superiority
+- **The Faithful** — Absolute certainty, divine purpose, dogmatic comfort, moral righteousness
+- **The Faithless / Skeptics** — Rebellion, unmasking hypocrisy, raw taboo truths, freedom
+- **Everyone** — Time, autonomy, escaping the rat race, freedom from the ticking clock
+
+Scripts tap into these strong emotional drivers with intense hooks, revealing the hidden psychological manipulation behind why people buy, crave, and believe. Source references: [Instagram Reel](https://www.instagram.com/reel/DSMO2SFiDdO/?hl=en), [Threads post](https://www.threads.com/@thepreserverofu/post/DSHi7BxjP89/easiest-ways-to-get-rich-sell-men-lust-sell-women-beauty-sell-parents-peace), [Facebook post](https://www.facebook.com/ViboyoMusic/posts/1-sell-men-lust-2-sell-women-beauty-3-sell-parents-peace-4-sell-kids-dreams-5-se/1395490745315684/).
 
 MoneyPrinterTurbo's own settings (LLM, keys, Upload-Post, privacy) live in `MPT_DIR\config.toml`. The Setup tab edits them safely: it reads the file fresh and changes only the needed keys.
 
@@ -170,6 +236,9 @@ run_daily.bat              :: a normal run (what the schedule does)
 run_daily.bat --dry-run    :: show what would happen, change nothing
 run_daily.bat --render     :: render one video now, never uploads
 run_daily.bat --doctor     :: JSON health report
+run_daily.bat --upload-next :: post the oldest approved video now (respects quota and mode), never renders
+run_daily.bat --audition   :: ten voices read the same lines: samples\voices\*.mp3, to choose by ear
+run_daily.bat --fix-loudness :: match the audio of older videos in review/approved to -14 LUFS (picture untouched, originals kept in backup\)
 python daily_shorts.py --self-test      :: logic tests (no MPT needed)
 python autopilot_gui.pyw --screenshot out.png [Tab]   :: app smoke test
 ```
@@ -181,9 +250,9 @@ For every video the app does this (all in `footage.py`):
 1. **Timing first.** MoneyPrinterTurbo makes the voiceover and its captions. The caption lines are grouped into *beats* of about 3.4 seconds. A beat starts exactly when its first words are spoken.
 2. **A shot plan.** Claude writes two search queries per beat (a specific one and a broader fallback), with any footage lessons from your rejections.
 3. **Many candidates.** Each beat searches Pixabay (and Coverr, if you added its key) plus your clip library, and keeps up to 8 candidates with the sources mixed. Landscape clips are accepted and cropped to vertical; Pixabay's 4K files are used when available so the crop stays sharp. This gives far more candidates than a vertical-only search.
-4. **Claude looks.** For each beat the app builds a contact sheet of numbered tiles, each showing the clip as it will appear on a phone (9:16 center crop). Claude ranks the clips that best illustrate the spoken words, rejecting visible text or logos, off-topic subjects and dull footage. If Claude can't be reached, the search order is used.
+4. **Claude looks.** For each beat the app builds a contact sheet of numbered tiles, each showing the clip as it will appear on a phone (9:16 center crop). Claude ranks the clips that best illustrate the spoken words, rejecting visible text or logos, off-topic subjects and dull footage. If Claude can't be reached, the search order is used. For any beat where **nothing fits**, a repair pass asks for three fresh search queries, fetches new candidates and looks again; a beat that is still weak is flagged under *footage match* in the quality checks, so you see it in Review instead of finding it on YouTube.
 5. **Placement.** Each chosen clip is trimmed to the beat's exact length from just before the middle of the footage (skipping the first and last frames). A beat longer than 4.2 seconds becomes two quick cuts. A clip that's slightly short is slowed down (never below 0.7x). No clip is used twice in one video.
-6. **Final mix.** Captions, voiceover and the chosen music are added by MoneyPrinterTurbo's own mixer.
+6. **Final pass.** Captions, look, voiceover and the chosen music are combined by [`motion.py`](#look-and-motion), or by MoneyPrinterTurbo's own mixer when Motion is Off.
 
 Sources and their rules:
 
@@ -195,6 +264,42 @@ Sources and their rules:
 | Vidsplay | **by hand only** (no API) | free for commercial use, but requires a visible credit link to Vidsplay.com; added to the description automatically |
 
 Read each site's license yourself before relying on it; you're responsible for what you post.
+
+## Narration and sound
+
+The narration is built by [`narrate.py`](narrate.py) and [`voices.py`](voices.py) in their own Python environment (`.venv-audio`), so MoneyPrinterTurbo's stays untouched.
+
+1. **Sentence by sentence.** The script is split into sentences and each is spoken on its own. That gives us the pauses (0.3 s after a sentence, 0.4 s after a question, a longer beat after the hook and at paragraph breaks), lets one bad sentence be redone alone, and gives every sentence an exact start and end.
+2. **Exact word timing.** Edge voices report the start of every word themselves (they agree with Whisper to a median of 14 ms). Kokoro doesn't, so Whisper measures it. The captions follow these times.
+3. **Checked against the script.** Whisper listens to every sentence and compares it with the script. A sentence heard as less than 80% like the script is spoken once more and the better take is kept; a video whose worst sentence is still poor is flagged in Review.
+4. **Mastered.** A voice chain adds warmth, presence and a gentle compressor (one setting for Edge voices, one for Kokoro), every sentence is brought to the same level, and the mix is matched to YouTube's -14 LUFS in two passes, so each video is equally loud.
+5. **Sound effects, made from scratch.** Whooshes that peak on the cut, a deep hit on big numbers and (in *Full*) a riser into the first number are synthesised from noise and sine waves in [`sound.py`](sound.py). Nothing is downloaded or sampled, so no third party can hold rights to them. That is deliberate: stock effects libraries, Pixabay's included, are one of the places Content ID claims come from. Effects are at least 1.4 seconds apart and never in the first or last second.
+
+**Choosing a voice.** Press **Audition voices** in Settings (or run `run_daily.bat --audition`): ten voices read the same three lines through the same mastering and are saved to `samples\voices`. Pick one in Settings → Narration and sound. Microsoft's newest voices (Andrew, Brian, Ava and Emma "Multilingual") work when called directly, although MoneyPrinterTurbo's own wrapper timed out on them.
+
+**Fallbacks.** If the audio environment, a model or the network isn't available, the video falls back to MoneyPrinterTurbo's own voiceover and is still finished. The log and the Review page say which was used.
+
+**Automatic checks.** After every render `qa.py` measures the file itself: format, length (45-80 s), loudness (-16 to -12.5 LUFS), peak, dead air over 1.4 s, black frames, frozen picture, file size, narration match and the caption design rules. The Review page shows *all passed* or what to look at. The checks only flag; approving stays your decision.
+
+## Look and motion
+
+New videos are finished by `motion.py` in one ffmpeg pass, so they don't look like a slideshow of stock clips. It follows a few design rules, adapted as ideas from [bang-motion](https://github.com/bangtutorial/bang-motion) (MIT, no code copied), and the app checks them mechanically on every video.
+
+| Part | What it does |
+|---|---|
+| **Captions that follow the voice** | Edge TTS reports when each word starts, so words appear exactly as they are spoken, two or three per line, never ending a line on "the" or "of". No emoji, no stray punctuation. |
+| **One accent colour** | A few keywords chosen by the AI, plus numbers, appear in your highlight colour (default `#FFD60A`): at most one per line and about one word in six. Everything else is white. |
+| **Big numbers** | When the voice says an amount or percentage that is in the script ($5,000, 10%, 1,947) it pops up large for a moment: at most three per video, six seconds apart, never invented. |
+| **Camera moves** | Every cut gets a different, eased move: push in, pull out, slide left, right or up, or hold. At most every other cut zooms, because zoom on every cut is the slideshow tell. Moves use sub-pixel sampling (about 0.01 px of jitter, against 0.5 px for crop or zoompan), so fine detail doesn't shimmer. |
+| **One look** | A single colour grade over every clip: *Clean* (default), *Cinematic* (soft vignette, light grain) or *Warm*, so footage from different sources feels like one piece. |
+| **Sound** | Music dips under the voice and comes back in the gaps; the mix is matched to YouTube's -14 LUFS so every video is equally loud. |
+| **Safe zones** | Nothing sits in the bottom 20% or right 15% of the screen, where the Shorts buttons and title are. |
+
+**Settings → Look and motion:** *Motion* is Subtle (default), Dynamic (bigger moves and a small punch at each cut) or Off (the old MoneyPrinterTurbo captions and still cuts). *Look* and *Highlight colour* complete it. Settings apply to new videos; older ones stay as they were. Camera moves are fixed when the clips are cut, while captions, look and music are applied in the last step, so **♪ Change music...** keeps all of it.
+
+If something fails (a filter this ffmpeg lacks, no word timing) the video falls back step by step: estimated word timing, then MoneyPrinterTurbo's own captions. The motion layer never costs you a video.
+
+The checks (`motion.check_ass`) allow at most two text sizes, one accent colour, under 25% highlighted words, nothing in the Shorts UI areas, one caption line at a time and camera moves that are not mostly zoom. `python daily_shorts.py --self-test` also runs every camera move and every look through real ffmpeg.
 
 ## Music
 
@@ -220,6 +325,8 @@ Read each site's license yourself before relying on it; you're responsible for w
 
 ## Credits and license
 
-- Voiceover, captions and final mix: [MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo) by harry0703 (MIT). This project uses it unmodified.
+- Script writing, footage search plumbing and the fallback voiceover: [MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo) by harry0703 (MIT). This project uses it unmodified.
+- Narration: [Kokoro-82M](https://github.com/hexgrad/kokoro) (Apache-2.0) through [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (MIT); [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (MIT) with OpenAI's [Whisper](https://github.com/openai/whisper) models (MIT); [edge-tts](https://github.com/rany2/edge-tts) for Microsoft's free neural voices.
+- Motion design rules (one accent colour, motivated motion, no zoom on every cut, safe zones): ideas from [bang-motion](https://github.com/bangtutorial/bang-motion) by bangtutorial (MIT). No code was copied. Other motion-graphics projects were studied for ideas only, because they carry no license.
 - Footage: [Pixabay](https://pixabay.com/service/license-summary/), [Coverr](https://coverr.co/license). Music: [Mixkit](https://mixkit.co/license/). Uploading: [Upload-Post](https://upload-post.com).
 - Shorts Autopilot is MIT licensed, see [LICENSE](LICENSE). Use it within YouTube's policies; you're responsible for what your channel posts.
