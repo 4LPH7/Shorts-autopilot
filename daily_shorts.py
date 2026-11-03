@@ -1866,8 +1866,10 @@ def self_test():
         finally:
             QUOTA.update(reset_day=1, meter_used=0, meter_date=None)
             set_base(HERE)
+    import clipper
     import lf_tests
     lf_tests.run()
+    clipper.self_test()
     print("self-test passed")
 
 
@@ -1935,6 +1937,14 @@ def run_command(args):
     if "--longform" in args:                  # long films: their own lock, so a long render never holds up the uploads
         import longform
         return longform.main(args[args.index("--longform") + 1:])
+    if "--clipper" in args:                   # Shorts cut from a video you have the rights to: one run at a time, like a render
+        import clipper
+        try:
+            with RunLock():
+                return clipper.run(Path(args[args.index("--clipper") + 1]))
+        except AlreadyRunning:
+            print("Another run is in progress; try again when it has finished.")
+            return 1
     if "--dry-run" in args:
         return run("dry")
     if "--audition" in args:                  # a mastered sample of each good free voice, to choose by ear

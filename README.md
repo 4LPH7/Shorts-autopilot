@@ -71,7 +71,7 @@ Later, open the app from the desktop shortcut or **`Shorts Autopilot.bat`**.
 | **History** | Every upload (it counts against the quota), with status and Upload-Post request id. Uploads with an unclear outcome show under **Needs checking**: look in YouTube Studio, then mark **It's live** or **Not uploaded**. **Rejected videos** lists every rejection with your reason, and **What it learned...** shows the rules future videos follow. |
 | **Long video** | Make, watch and approve 8-10 minute animated films: start one from a question, follow its progress, **Watch**, **Approve** or **Reject...** it, bring in clips made in Google Vids and copy the title, description and tags for a hand upload. See [Long videos](#long-videos). |
 | **Music** | Your approved tracks with their mood tags (the AI uses the tags to match a track to each video). **▶ Listen** plays one. **Add track...** asks for the source, mood tags and a license confirmation. No tracks means voice-only videos. |
-| **Clips** | Your own clip library: footage you download by hand from Mixkit, Vidsplay or Coverr. Add each with a source and a few tags, and the picker considers it whenever the tags match a scene. |
+| **Clips** | Two things. **Shorts from a video you have the rights to**: choose your own video (or one licensed for reuse), say where it comes from, and the app cuts the best moments into captioned, scored Shorts that wait in Review: see [below](#shorts-from-a-video-you-have-the-rights-to). And your own clip library: footage you download by hand from Mixkit, Vidsplay or Coverr. Add each with a source and a few tags, and the picker considers it whenever the tags match a scene. |
 | **Settings** | Niche, language, voice, **voice speed**, script rules, uploads per month, run times, number of videos to keep waiting, **music mode** (AI best fit / always one track / none), music volume, **narration and sound** (voice engine, voice, mastering, sound effects, an **Audition voices** button), **look and motion** (camera moves, colour grade, highlight colour), upload mode, quota cycle, cache cleanup, YouTube privacy. Changing the run times re-registers the schedule. You can also pause or resume the schedule here. |
 | **Setup** | Health checklist with a fix button on every row (see Install). |
 | **Logs** | The full run log, with a *Problems only* filter. |
@@ -159,6 +159,18 @@ A 9-minute film takes roughly 30-40 minutes on this PC: about 10 for the script,
 
 Set up once by `install.bat` (needs Node.js 22 or newer): `cd longform` and `npm install --ignore-scripts`. HyperFrames fetches its font (Nunito, from Google Fonts) and its own headless Chrome the first time; its usage telemetry is switched off for every render. Everything a film makes lives in `longform/films/<film>/` (git-ignored).
 
+## Shorts from a video you have the rights to
+
+On the **Clips** page, choose a video file (your own recording, one of your long films, or one with a licence that allows reuse), say where it comes from, tick the rights box and click **Make Shorts**. For a source of up to two hours:
+
+1. **Listen.** Whisper (on this PC, nothing uploaded) writes the transcript with a time for every word.
+2. **Pick.** Your Claude chooses the best self-contained moments (22-58 s, starting on a hook and ending where a thought is complete); without it, the densest openings are used. Every cut lands on a sentence boundary.
+3. **Reframe.** 9:16 either as the whole picture over a blurred copy of itself or cropped to fill the screen, with a punch-in zoom on every second stretch.
+4. **Finish.** The same finish as every Short: word-timed captions with highlighted keywords, one look, synthesised sound effects on the cuts and big numbers, an approved music track ducked under the speech, YouTube loudness, automatic checks.
+5. **Review.** Each Short waits in Review with its source, time range and your rights statement; the title, description (with your credit line) and tags are editable, and nothing posts until you approve it.
+
+The app only takes a file, never a link, and refuses to start unless the rights are stated and confirmed. Someone else's famous video is not a valid source: see [SAFETY.md](SAFETY.md). From the command line: `run_daily.bat --clipper job.json` with `{"source": "C:/videos/talk.mp4", "n": 3, "frame": "fit", "confirmed": true, "rights": "my own recording"}`. English speech only for now.
+
 ## Files and folders
 
 ```
@@ -183,6 +195,7 @@ shorts-autopilot/
 ├─ schedule_uploads.ps1     registers one-time "post the next approved video" tasks
 ├─ longform.py              long films: stages, render, mix, checks (folder per film in longform/films)
 ├─ longform_page.py         the Long video page of the app
+├─ clipper.py               Shorts cut from a video you have the rights to; clip_worker.py transcribes it, clipper_page.py is the Clips panel
 ├─ lf_screenplay.py         the long-film writer: concept, cast, scenes, beats, and the vocabulary the animation knows
 ├─ lf_plan.py               screenplay + voice timings -> scenes (shots, cards, captions); lf_build.py writes the HyperFrames project
 ├─ lf_voice.py              one voice per character (runs in .venv-audio); lf_audio.py mixes; lf_finish.py checks, thumbnail, upload text

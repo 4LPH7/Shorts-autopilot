@@ -31,6 +31,7 @@ except ImportError:  # MPT updates (uv sync) can remove it; say how to fix inste
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import daily_shorts as eng  # noqa: E402
+import clipper_page  # noqa: E402
 import longform_page  # noqa: E402
 
 TASK = "MPT Daily Shorts"
@@ -262,10 +263,10 @@ def set_text(box, text, readonly=False):
 
 # ---- App -----------------------------------------------------------------------------
 
-longform_page.G = sys.modules[__name__]           # the Long video page uses this file's look (label, button, C, ...)
+longform_page.G = clipper_page.G = sys.modules[__name__]           # these pages use this file's look (label, button, C, ...)
 
 
-class App(longform_page.LongVideoPage):
+class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
     def __init__(self, root):
         self.root = root
         self.q = queue.Queue()
@@ -851,9 +852,12 @@ class App(longform_page.LongVideoPage):
             "to look at: " + ", ".join(c["name"] for c in qa["checks"] if not c["ok"])
         nar = meta.get("narration") or {}
         voice = nar.get("voice") if nar.get("engine") not in (None, "mpt") else "MoneyPrinterTurbo's"
+        src = meta.get("source")                 # a Short cut from a video you supplied (clipper.py)
+        footage_line = (f"Source: {src['file']}, {src['from']:.0f}-{src['to']:.0f} s. Rights: {src['rights']}" + (f"\nCredit: {src['credit']}" if src.get("credit") else "")
+                        if src else f"Footage: {len(meta.get('clips', []))} clips{credits}")
         self.video_info.configure(text=f"Voice: {voice}  ·  Music: {meta.get('music', '-')}\n"
                                        f"Checks: {checks}\n"
-                                       f"Footage: {len(meta.get('clips', []))} clips{credits}\n"
+                                       f"{footage_line}\n"
                                        f"Rendered {when(meta.get('rendered'))}  ·  {size}")
         self.approve_btn.configure(state="disabled" if approved else "normal")
         self.reject_btn.configure(state="disabled" if approved else "normal")
@@ -1342,10 +1346,11 @@ class App(longform_page.LongVideoPage):
                                 "required credit is added to the description automatically.",
                     actions=[("Open folder", lambda: open_path(eng.CLIPS), "ghost"),
                              ("Add clip", self.add_clip, "primary")])
+        self.build_clipper_panel(p)
         box, inner, head = self.section(p, "Your clip library")
         box.pack(fill="both", expand=True)
         button(head, "Remove", self.remove_clip, "danger").pack(side="right")
-        fr, self.clips_tree = self.table(inner, ("File", "Source", "Tags", "File"), (300, 120, 520, 70), 12)
+        fr, self.clips_tree = self.table(inner, ("File", "Source", "Tags", "File"), (300, 120, 520, 70), 6)
         fr.pack(fill="both", expand=True)
         foot = ctk.CTkFrame(p, fg_color="transparent")
         foot.pack(fill="x", pady=(12, 0))
