@@ -1586,8 +1586,11 @@ class App:
         self.sched_label.configure(text=f"Next run {t.get('next') or '-'}   ·   times {', '.join(t.get('times') or []) or '-'}"
                                         f"   ·   last run {t.get('last') or '-'}")
         if hasattr(self, "rows"):
-            ok = bool(t) and str(HERE).lower() in str(t.get("action", "")).lower()
-            self.set_row("schedule", ok, f"{state}. Next run {t.get('next') or '-'}." if t else "Not registered.")
+            action = str(t.get("action", "")).lower()
+            ok = bool(t) and str(HERE).lower() in action and "run_hidden.pyw" in action
+            self.set_row("schedule", ok, "Not registered." if not t else
+                         f"{state}. Next run {t.get('next') or '-'}." if ok else
+                         "Registered the old way: its window can be closed mid-run. Click Register or repair.")
 
     # ---- Setup -------------------------------------------------------------------------------
     def build_setup(self):

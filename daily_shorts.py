@@ -19,6 +19,7 @@ so all rules live here once.
 """
 
 import json
+import os
 import random
 import re
 import shutil
@@ -117,13 +118,14 @@ HERE = Path(__file__).resolve().parent
 def set_base(base):
     """Point every data path at `base` (the project folder; tests use a temp dir)."""
     global BASE, SETTINGS, HISTORY, LOG_DIR, RUNS, LOCK, LEDGER, SAFE_MUSIC, MUSIC_SOURCES
-    global REVIEW, APPROVED, POSTED, CHECK, THUMBS, FEEDBACK, LESSONS, WORK, CLIPS, CLIPS_SOURCES, UPLOAD_STATE, BACKUP
+    global REVIEW, APPROVED, POSTED, CHECK, THUMBS, FEEDBACK, LESSONS, WORK, CLIPS, CLIPS_SOURCES, UPLOAD_STATE, BACKUP, INFLIGHT
     BASE = Path(base)
     WORK = BASE / "work"                      # per-video leftovers that allow swapping the music later
     CLIPS = BASE / "clips"                    # your hand-downloaded clips (Mixkit, Vidsplay, ...)
     CLIPS_SOURCES = CLIPS / "SOURCES.txt"
     UPLOAD_STATE = BASE / "upload_state.json" # why automatic uploads are paused, if they are
     BACKUP = BASE / "backup"                  # originals kept before a fix (see fix_loudness)
+    INFLIGHT = BASE / "upload_inflight.json"  # exists while an upload is under way; left behind if the run is killed
     FEEDBACK = BASE / "feedback.jsonl"        # one line per rejected video: why you rejected it
     LESSONS = BASE / "lessons.json"           # rules distilled from the feedback (fed to the prompts)
     SETTINGS = BASE / "settings.json"
@@ -1283,6 +1285,43 @@ def remix_music(M, stem, track):
 
 # ---- Uploading -------------------------------------------------------------------
 
+def upload_marked(upload_post, stem, label, **kwargs):
+    """upload_post.cross_post_video with a marker file around it. If the run is killed in the middle (a window
+    closed, the PC lost power) the marker stays behind and recover_interrupted_upload() deals with it next time."""
+    INFLIGHT.write_text(json.dumps({"stem": stem, "title": label, "pid": os.getpid(),
+                                    "started": datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
+    try:
+        return upload_post.cross_post_video(**kwargs)
+    finally:
+        INFLIGHT.unlink(missing_ok=True)
+
+
+def recover_interrupted_upload():
+    """An upload that was started but never finished may or may not have reached YouTube. It is never retried
+    blindly (that could post it twice): the video goes to check/ for a look in YouTube Studio, like any upload with
+    an unclear result. Returns the video's name, or None if nothing was interrupted."""
+    if not INFLIGHT.exists():
+        return None
+    try:
+        info = json.loads(INFLIGHT.read_text(encoding="utf-8"))
+    except ValueError:
+        info = {}
+    INFLIGHT.unlink(missing_ok=True)
+    stem = str(info.get("stem") or "")
+    video = pair(APPROVED, stem)[0]
+    if not stem or not video.exists():
+        return None
+    move_pair(stem, APPROVED, CHECK)
+    ledger = load_ledger()
+    ledger.append({"time": datetime.now().isoformat(timespec="seconds"), "title": info.get("title") or stem,
+                   "file": video.name, "status": "unconfirmed", "request_id": None,
+                   "note": f"the run stopped during the upload that began {info.get('started', '?')}"})
+    save_ledger(ledger)
+    print(f"UPLOAD INTERRUPTED: '{info.get('title') or stem}' was being uploaded when the run stopped. It may already be "
+          "on YouTube: look in Studio, then mark it under History > Needs checking.")
+    return stem
+
+
 def upload_next(upload_post, svc):
     """Upload the oldest approved video. Returns (status, title, error);
     status is "posted", "unconfirmed", "failed" or "none" (nothing approved)."""
@@ -1300,7 +1339,8 @@ def upload_next(upload_post, svc):
     title = meta.get("title") or stem
     # Footage sources that require a visible credit (Vidsplay, Coverr) are named in the description
     description = upload_description(meta)
-    result = upload_post.cross_post_video(
+    result = upload_marked(
+        upload_post, stem, title,
         video_path=str(video), title=description or title, platforms=["youtube"],
         youtube_extra={
             "youtube_title": title,
@@ -1354,6 +1394,8 @@ def run(mode):
     svc = upload_post.upload_post_service
     for d in (REVIEW, APPROVED, POSTED):
         d.mkdir(exist_ok=True)
+    if mode != "dry":
+        recover_interrupted_upload()
 
     now = datetime.now()
     due, why = upload_due(now, load_ledger(), int(s["monthly_uploads"]), times)
@@ -1588,6 +1630,36 @@ def self_test():
             assert "audio_fixed" in load_meta(APPROVED, "quiet") and fix_loudness((APPROVED,)) == []
         finally:
             set_base(HERE)
+    with _tf.TemporaryDirectory() as t5:              # an upload killed midway is parked for checking, never retried blindly
+        from types import SimpleNamespace as NS
+        quota_before = dict(QUOTA)                    # load_settings() (inside upload_next) changes it; later tests assume it
+        set_base(t5)
+        try:
+            APPROVED.mkdir(parents=True)
+            for name in ("a", "b"):
+                (APPROVED / f"{name}.mp4").write_bytes(b"x")
+                (APPROVED / f"{name}.json").write_text(json.dumps({"title": name.upper()}), encoding="utf-8")
+            assert recover_interrupted_upload() is None                       # nothing was under way
+            seen = {}
+
+            def fake_post(**kw):
+                seen["marker"] = json.loads(INFLIGHT.read_text(encoding="utf-8"))["stem"]     # marked while the request runs
+                return {"success": True, "request_id": "r1"}
+            status, _, _ = upload_next(NS(cross_post_video=fake_post), NS(youtube_privacy_status="public"))
+            assert status == "posted" and seen["marker"] == "a" and not INFLIGHT.exists() and stems(POSTED) == ["a"]
+            INFLIGHT.write_text(json.dumps({"stem": "b", "title": "B", "started": "2026-11-03T10:11:16", "pid": 1}), encoding="utf-8")
+            assert recover_interrupted_upload() == "b" and stems(CHECK) == ["b"] and not INFLIGHT.exists()
+            last = load_ledger()[-1]
+            assert last["status"] == "unconfirmed" and last["file"] == "b.mp4", last
+            resolve_check("b", False)                                           # "it never arrived": back in the queue
+            assert stems(APPROVED) == ["b"] and all(e["file"] != "b.mp4" for e in load_ledger())
+            INFLIGHT.write_text("{broken", encoding="utf-8")
+            assert recover_interrupted_upload() is None and not INFLIGHT.exists()      # a damaged marker is harmless
+            with KeepAwake():                                                   # never raises, even where it can't act
+                pass
+        finally:
+            QUOTA.update(quota_before)
+            set_base(HERE)
     assert slugify("Why $9.99 tricks you!") == "why-9-99-tricks-you"
     assert parse_times(["19:00", "9:30", "19:00"]) == [(9, 30), (19, 0)]
     for bad in (["25:00"], [], ["x"]):
@@ -1803,6 +1875,7 @@ def upload_next_now():
     s = load_settings()
     M = load_mpt()
     svc = M.upload_post.upload_post_service
+    recover_interrupted_upload()                  # an earlier run killed mid-upload: park it before counting
     now = datetime.now()
     used = used_this_month(load_ledger(), now)
     limit = int(s["monthly_uploads"])
@@ -1825,7 +1898,33 @@ def upload_next_now():
     return record["exit"]
 
 
+class KeepAwake:
+    """Asks Windows not to go to sleep while a run is in progress: a render or an upload suspended by standby is lost
+    (a laptop in Modern Standby was woken mid-upload on 2026-11-03)."""
+
+    @staticmethod
+    def _state(flags):
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetThreadExecutionState(flags)
+        except Exception:                          # not Windows, or no permission: carry on without
+            pass
+
+    def __enter__(self):
+        self._state(0x80000001)                    # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+        return self
+
+    def __exit__(self, *exc):
+        self._state(0x80000000)                    # ES_CONTINUOUS alone: back to normal
+        return False
+
+
 def main(args):
+    with KeepAwake():
+        return run_command(args)
+
+
+def run_command(args):
     if "--self-test" in args:
         self_test()
         return 0

@@ -135,7 +135,9 @@ The free Upload-Post plan allows 10 uploads a cycle. When they run out nothing b
 
 A reminder under the button lists the two answers YouTube asks for: **altered or synthetic content = Yes** (the voice is AI) and **made for kids = No**. Manual uploads are written to the ledger as `manual`, so they never count against the Upload-Post quota.
 
-`schedule_uploads.ps1` registers one-time tasks that run `run_daily.bat --upload-next` at the times you give. It posts the oldest approved video (respecting the quota and the mode) and never renders anything.
+`schedule_uploads.ps1` registers one-time tasks that run `--upload-next` at the times you give. It posts the oldest approved video (respecting the quota and the mode) and never renders anything.
+
+**Scheduled runs have no window.** Task Scheduler starts `run_hidden.pyw` (through `pythonw`), which starts `run_daily.bat` hidden. A visible console window can be closed or Ctrl+C'd, and that silently killed runs on 2026-11-03, one of them in the middle of an upload (`logs/crash.log`: `window-CLOSE event`). The run also asks Windows not to sleep while it works. An upload that still gets cut off is moved to **Needs checking** by the next run: it is never retried on its own, so a video can't post twice. After updating from an older version, click **Setup → Daily schedule → Register or repair** (and run `schedule_uploads.ps1` again for any one-time upload tasks) so the tasks use the hidden launcher.
 
 ## Files and folders
 
@@ -143,8 +145,10 @@ A reminder under the button lists the two answers YouTube asks for: **altered or
 shorts-autopilot/
 ├─ Shorts Autopilot.bat     open the app
 ├─ install.bat              one-time setup on a new PC
-├─ run_daily.bat            one run (Task Scheduler and the app call it)
+├─ run_daily.bat            one run (the app and run_hidden.pyw call it)
+├─ run_hidden.pyw           starts run_daily.bat with no window (what Task Scheduler runs)
 ├─ setup_schedule.ps1       registers the "MPT Daily Shorts" task
+├─ task_common.ps1          shared by both schedule scripts: the hidden-launch action, wake and late-start settings
 ├─ autopilot_gui.pyw        the app (Tkinter)
 ├─ daily_shorts.py          the engine: schedule, queue, music, learning, uploads
 ├─ footage.py               finding, looking at and placing clips
@@ -317,7 +321,8 @@ The checks (`motion.check_ass`) allow at most two text sizes, one accent colour,
 | "Pexels key issuance paused" | Use Pixabay (the default here). |
 | Footage doesn't fit | Reject the video and say what was wrong (Footage reason): the lesson is applied to the next shot plans. Add better clips in the **Clips** tab, or a Coverr key in Setup for more candidates. |
 | "Vision pick failed" in the log | The Claude CLI couldn't read the contact sheets (not installed, not logged in, or usage limit). The first search result is used instead, so videos still finish but match less well. |
-| An upload is in **Needs checking** | The connection dropped mid-upload. Look in YouTube Studio, then click *It's live* or *Not uploaded*. It's never retried automatically, so you don't get double posts. |
+| An upload is in **Needs checking** | The connection dropped mid-upload, or the run was stopped during it (PC shut down, process killed). Look in YouTube Studio, then click *It's live* or *Not uploaded*. It's never retried automatically, so you don't get double posts. |
+| `crash.log` says `window-CLOSE event`, or Task Scheduler's last result is 3221225786 (0xC000013A) | The run's console window was closed or Ctrl+C'd. Click **Setup → Daily schedule → Register or repair** so runs use the hidden launcher (no window to close). If it hit an upload, see *Needs checking* above. |
 | A Short got a copyright claim | See [SAFETY.md](SAFETY.md): remove the track in the Music tab and fix the video in Studio. |
 | Nothing ran at 09:00 | The PC must be on or asleep (it wakes for the task), not shut down. A missed run starts when the PC comes back. Check **Settings → Schedule** and **Logs**. |
 | "Another run is in progress" | Normal when a manual run overlaps a scheduled one. Only one runs at a time. |
