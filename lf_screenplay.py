@@ -37,14 +37,16 @@ Write the concept, the cast and the scene outline. Rules:
 - Structure: a cold open that hooks in the first 20 seconds; setup; three escalating complications, each exploring ONE real mechanism (science, economics, psychology, history) with concrete numbers; a midpoint twist; an emotional turn; a resolution that calls back to the opening.
 - Facts: only things you are confident are true. Anything illustrative is framed as "imagine" or "roughly".
 - 14 to 18 scenes. Each has a room, a time of day, who is in it, where they stand and a one-line purpose. A scene is 20 to 45 seconds. Give each scene a "words" budget so the budgets add up to the total.
+- Brief: the single question the film answers, an original angle, a one-sentence takeaway, three different accurate title options (no exaggerated claims) and the opening image. Per scene list the real-world claims it makes in "facts" (at most 4) and set "check": true on any you are not certain of, so a person verifies them before the film is approved.
 - "chapter": true on at most 4 scenes (a title card opens them). "vids": on at most 3 scenes, a one-sentence prompt for a cinematic 8-second live-action cutaway an AI video generator could make (no people's faces, no logos, no text); omit otherwise.
 Allowed values: room {list(ROOMS)}; tone {list(TONES)}; start {list(STARTS)}; position {list(SLOTS)}; voice {list(VOICE_TYPES)} (every character a different voice); narrator voice "deep" or "warm".
 {LOOK_HELP}
 JSON rules: valid JSON only; inside strings use single quotes for quoted phrases (never unescaped double quotes) and no line breaks.
 Reply with ONLY this JSON:
-{{"title":"...", "logline":"...", "description":"YouTube description, 3-4 sentences", "tags":["..."], "narrator":{{"voice":"deep"}},
+{{"title":"...", "logline":"...", "brief":{{"question":"the one question the film answers", "angle":"what makes this treatment original", "takeaway":"one sentence", "titles":["accurate option 1","option 2","option 3"], "first_frame":"the opening image"}},
+ "description":"YouTube description, 3-4 sentences", "tags":["..."], "narrator":{{"voice":"deep"}},
  "cast":[{{"id":"you","name":"...","role":"...","personality":"...","voice":"male-warm","look":{{...}}}}],
- "scenes":[{{"id":"s01","title":"...","chapter":false,"room":"hospital","tone":"night","cast":["you"],"pos":{{"you":"center"}},"start":{{"you":"lie"}},"purpose":"...","words":80,"vids":"optional"}}]}}"""
+ "scenes":[{{"id":"s01","title":"...","chapter":false,"room":"hospital","tone":"night","cast":["you"],"pos":{{"you":"center"}},"start":{{"you":"lie"}},"purpose":"...","words":80,"facts":[{{"claim":"a real-world claim this scene makes","check":false}}],"vids":"optional"}}]}}"""
 
 
 def beats_prompt(sp, ids, done_tail):
@@ -173,9 +175,14 @@ def check_outline(sp):
         s["pos"] = {c: (s.get("pos", {}).get(c) if s.get("pos", {}).get(c) in SLOTS else list(SLOTS)[1 + k * 2 % 4]) for k, c in enumerate(s["cast"])}
         s["start"] = {c: (s.get("start", {}).get(c) if s.get("start", {}).get(c) in STARTS else "stand") for c in s["cast"]}
         s["words"] = int(s.get("words") or 80)
+        s["facts"] = [{"claim": clip(f.get("claim"), 160), "check": bool(f.get("check"))} for f in (s.get("facts") or [])
+                      if isinstance(f, dict) and str(f.get("claim", "")).strip()][:4]
         s["chapter"] = bool(s.get("chapter"))
         s.setdefault("title", f"Scene {i}")
         s.setdefault("purpose", "")
+    b = sp.get("brief") if isinstance(sp.get("brief"), dict) else {}
+    sp["brief"] = {"question": clip(b.get("question"), 200), "angle": clip(b.get("angle"), 240), "takeaway": clip(b.get("takeaway"), 200),
+                   "titles": [clip(t, 100) for t in (b.get("titles") or [])[:3] if str(t).strip()], "first_frame": clip(b.get("first_frame"), 200)}
     sp.setdefault("narrator", {"voice": "deep"})
     sp["narrator"]["voice"] = "warm" if sp["narrator"].get("voice") == "warm" else "deep"
     sp.setdefault("tags", [])
@@ -220,6 +227,11 @@ def write_beats(sp, ask_llm, batch=4, progress=print, save=None, debug_dir=None)
         if save:
             save(sp)
     return sp
+
+
+def claims(sp):
+    """[(scene id, scene title, claim, needs checking)]: every real-world claim the writer listed, for a person to verify."""
+    return [(s["id"], s["title"], f["claim"], f["check"]) for s in sp["scenes"] for f in s.get("facts", [])]
 
 
 def spoken_words(sp):

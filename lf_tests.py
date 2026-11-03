@@ -86,4 +86,61 @@ def run():
         sp["scenes"][i]["chapter"] = True
     pack = lf_finish.upload_pack(sp, [{"dur": 70}] * 4, "f.mp4", "nope.jpg")
     assert lf_finish.stamp(125) == "2:05" and "0:00 Intro" in pack["description"] and "1:10 Scene 2" in pack["description"] and pack["thumbnail"] == ""
+    # the brief, the claims, the checks on the plan and the record of what went in
+    raw = outline()
+    raw["brief"] = {"question": "Q" * 300, "titles": ["a", "b", "c", "d", ""], "angle": None}
+    raw["scenes"][0]["facts"] = [{"claim": "x" * 400, "check": 1}, {"claim": "  "}, "junk", {"claim": "ok", "check": False}] + [{"claim": "e"}] * 3
+    sp2 = sc.check_outline(raw)
+    assert len(sp2["brief"]["question"]) == 200 and sp2["brief"]["titles"] == ["a", "b", "c"] and sp2["brief"]["angle"] == ""
+    facts = sp2["scenes"][0]["facts"]
+    assert len(facts) == 4 and facts[0]["check"] is True and len(facts[0]["claim"]) == 160 and facts[1]["claim"] == "ok"
+    assert sc.claims(sp2)[0][:2] == ("s01", "Scene 1") and sc.claims(sp2)[0][3] is True and len(sc.claims(sp2)) == 4
+    plan_checks = {c["name"]: c for c in lf_finish.check_plan(lf_plan.plan(sp, tm), sp)["checks"]}
+    assert not plan_checks["length"]["ok"] and plan_checks["captions fit"]["ok"] and plan_checks["claims"]["ok"]       # a toy film is far under 8 minutes
+    assert not plan_checks["every character speaks"]["ok"] and "Kid" in plan_checks["every character speaks"]["detail"]
+    sp["scenes"][0]["facts"] = [{"claim": "c", "check": True}]
+    assert not {c["name"]: c for c in lf_finish.check_plan(lf_plan.plan(sp, tm), sp)["checks"]}["claims"]["ok"]
+    man = lf_finish.manifest(sp, lf_plan.plan(sp, tm), [("a.mp3", "Mixkit free")], {"seconds": 12.0})
+    assert man["voices"]["Narrator"] == "en-US-ChristopherNeural" and man["music"][0]["source"] == "Mixkit free" and man["generated_clips"] == []
+    assert json.loads(json.dumps(man))["claims"][0]["check"] is True
+    gates_test()
     print("long-film self-test passed")
+
+
+def gates_test():
+    """A film made with gates stops after the script and after the storyboard until a person approves; one without runs straight through."""
+    import tempfile
+    from pathlib import Path
+
+    import longform
+    names = ("write_screenplay", "voice_film", "build_film", "render_film", "finish_film")
+    saved, old, calls = {n: getattr(longform, n) for n in names}, longform.FILMS, []
+
+    def step(name, nxt):
+        def fn(film, *args, **kwargs):
+            calls.append(name)
+            film.update(stage=nxt)
+        return fn
+    with tempfile.TemporaryDirectory() as tmp:
+        longform.FILMS = Path(tmp)
+        try:
+            for n, (label, nxt) in zip(names, (("script", "screenplay"), ("voice", "voiced"), ("build", "built"), ("render", "rendered"), ("finish", "review"))):
+                setattr(longform, n, step(label, nxt))
+            film = longform.new_film("gated", 9, 5, gates=True)
+            longform.run_all(film, {}, ask_llm=lambda prompt: "")
+            assert calls == ["script"] and film.meta["stage"] == "screenplay" and "script ready" in film.meta["message"]
+            longform.run_all(film, {}, ask_llm=None)
+            assert calls == ["script"]                                              # nobody approved the script yet
+            longform.approve_gate(film, "screenplay")
+            longform.run_all(film, {}, ask_llm=None)
+            assert calls == ["script", "voice", "build"] and film.meta["stage"] == "built"
+            longform.approve_gate(film, "built")
+            longform.run_all(film, {}, ask_llm=None)
+            assert calls[-2:] == ["render", "finish"] and film.meta["stage"] == "review"
+            calls.clear()
+            longform.run_all(longform.new_film("free", 9, 5), {}, ask_llm=lambda prompt: "")
+            assert calls == ["script", "voice", "build", "render", "finish"]
+        finally:
+            for n, fn in saved.items():
+                setattr(longform, n, fn)
+            longform.FILMS = old

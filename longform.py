@@ -36,6 +36,10 @@ AUDIO_PY = HERE / ".venv-audio" / "Scripts" / "python.exe"
 NO_WINDOW, BELOW_NORMAL = 0x08000000, 0x00004000
 ORDER = ("new", "screenplay", "voiced", "built", "rendered", "review")
 ENV = {"HYPERFRAMES_NO_TELEMETRY": "1", "HYPERFRAMES_SKIP_SKILLS": "1", "PYTHONIOENCODING": "utf-8"}
+# Where a film made with gates waits for a person: reading the script costs minutes, a bad render costs half an hour.
+GATES = ("screenplay", "built")
+GATE_TEXT = {"screenplay": "script ready: read it, check the claims, then approve it", "built": "storyboard ready: look it over, then render the film"}
+GATE_BUTTON = {"screenplay": "Approve the script and continue", "built": "Looks good, render the film"}
 
 
 class Film:
@@ -68,13 +72,14 @@ def slug(text):
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "film"
 
 
-def new_film(topic, minutes=9, cast_size=5):
+def new_film(topic, minutes=9, cast_size=5, gates=False):
+    """gates=True: the run stops for the person after the script and after the storyboard (see GATES)."""
     folder = FILMS / f"{datetime.now():%Y%m%d-%H%M}-{slug(topic)}"
     folder.mkdir(parents=True)
     film = Film.__new__(Film)
     film.dir, film.meta = folder, {}
-    film.update(topic=topic, minutes=minutes, cast_size=cast_size, stage="new", title=topic, message="", progress=0.0, error="",
-                created=datetime.now().isoformat(timespec="seconds"))
+    film.update(topic=topic, minutes=minutes, cast_size=cast_size, gates=gates, approved=[], stage="new", title=topic, message="",
+                progress=0.0, error="", created=datetime.now().isoformat(timespec="seconds"))
     return film
 
 
@@ -164,8 +169,51 @@ def build_film(film):
     scenes = lf_plan.plan(sp, timings, gap, vids)
     total = lf_build.write_project(proj, scenes)
     film.plan.write_text(json.dumps(scenes), encoding="utf-8")
-    film.update(stage="built", seconds=round(total, 1), progress=1.0, error="", gap=round(gap, 2), clips=len(vids),
+    lint_project(film)
+    film.say("making the storyboard sheet", 0.6)
+    sheet = storyboard(film, scenes)
+    film.update(stage="built", seconds=round(total, 1), progress=1.0, error="", gap=round(gap, 2), clips=len(vids), storyboard=bool(sheet),
+                plan_checks=lf_finish.check_plan(scenes, sp),
                 message=f"project built: {len(scenes)} scenes, {int(total // 60)}:{int(total % 60):02d}")
+
+
+def lint_project(film):
+    """HyperFrames' own linter over the generated project: an error there would waste the whole render, so stop now."""
+    node = shutil.which("node")
+    if not node or not HF.exists():
+        return
+    r = subprocess.run([node, str(HF), "lint"], cwd=str(film.dir / "project"), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env={**os.environ, **ENV}, timeout=300, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW | BELOW_NORMAL)
+    out = (r.stdout or "") + (r.stderr or "")
+    found = re.search(r"(\d+)\s+error", out)
+    if found and int(found.group(1)):
+        raise RuntimeError("HyperFrames found errors in the project: " + " | ".join(
+            ln.strip() for ln in out.splitlines() if "error" in ln.lower() or ln.strip().startswith(("✗", "[", "⚠")))[:400])
+
+
+def storyboard(film, scenes):
+    """One frame from the middle of every scene on a contact sheet (out/storyboard.jpg), made before the long render so a
+    wrong room, a crowded card or a missing character is found in a minute, not after half an hour. None if it can't be made."""
+    node = shutil.which("node")
+    if not node or not HF.exists():
+        return None
+    times, t0 = [], 0.0
+    for s in scenes:
+        times.append(round(t0 + min(s["dur"] - 0.5, max(1.0, s["dur"] * 0.45)), 2))
+        t0 += s["dur"]
+    try:
+        r = subprocess.run([node, str(HF), "snapshot", "--at", ",".join(str(t) for t in times)], cwd=str(film.dir / "project"), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", env={**os.environ, **ENV}, timeout=900, stdin=subprocess.DEVNULL,
+                           creationflags=NO_WINDOW | BELOW_NORMAL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    found = re.search(r"([A-Za-z]:\\[^\r\n]*?contact-sheet\.jpg)", (r.stdout or "") + (r.stderr or ""))
+    if r.returncode or not found or not Path(found.group(1)).exists():
+        return None
+    dest = film.dir / "out" / "storyboard.jpg"
+    dest.parent.mkdir(exist_ok=True)
+    shutil.copyfile(found.group(1), dest)
+    return dest
 
 
 def render_film(film, quality="looks", workers=3):
@@ -177,6 +225,7 @@ def render_film(film, quality="looks", workers=3):
     silent = out / "silent.mp4"
     silent.unlink(missing_ok=True)
     film.say("rendering the picture (this takes a while)", 0.0)
+    began = time.monotonic()
     p = subprocess.Popen([node, str(HF), "render", str(film.dir / "project"), "--output", str(silent), "--quality", quality, "--fps", "30",
                           "--workers", str(workers)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                          env={**os.environ, **ENV}, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW | BELOW_NORMAL)
@@ -206,7 +255,7 @@ def render_film(film, quality="looks", workers=3):
             tail = (tail + [line.rstrip()])[-8:]
     if p.wait() or not silent.exists() or silent.stat().st_size < 100_000:
         raise RuntimeError("the render failed: " + " | ".join(tail)[-500:])
-    film.update(stage="rendered", progress=1.0, error="", message="picture rendered")
+    film.update(stage="rendered", progress=1.0, error="", message="picture rendered", render_seconds=round(time.monotonic() - began))
 
 
 def finish_film(film, settings):
@@ -225,13 +274,14 @@ def finish_film(film, settings):
     voice = sound.master_voice(raw, audio / "voice.wav", "edge")
     cuts, hits = lf_audio.sfx_plan(scenes)
     sfx, _ = sound.sfx_track(audio / "sfx.wav", total, cuts, hits, settings.get("sfx_level", "subtle"), seed=len(film.id))
-    music = None
+    music, used_music = None, []
     if settings.get("music_mode", "auto") != "none":
         import daily_shorts as e
         entries = [(n, s_, t) for n, s_, t, ok in e.music_entries() if ok]
         files = [e.SAFE_MUSIC / n for n in lf_audio.pick_music(entries, 2, seed=len(film.id))]
         if files:
             music = lf_audio.music_track(files, total, audio / "music.wav", audio)
+            used_music = [(f.name, {n: s_ for n, s_, _ in entries}.get(f.name, "")) for f in files]
     mixed = lf_audio.mix(voice, sfx, music, audio / "mix.wav", float(settings.get("lf_music_gain", 0.32)))
     joined = lf_audio.mux(out / "silent.mp4", mixed, out / "joined.mp4")
     film.say("matching the loudness to YouTube", 0.6)
@@ -242,6 +292,7 @@ def finish_film(film, settings):
     checks = lf_finish.check_film(final, total)
     pack = lf_finish.upload_pack(sp, scenes, final, out / "thumb.jpg")
     (film.dir / "upload_pack.json").write_text(json.dumps(pack, ensure_ascii=False, indent=1), encoding="utf-8")
+    (film.dir / "manifest.json").write_text(json.dumps(lf_finish.manifest(sp, scenes, used_music, film.meta), ensure_ascii=False, indent=1), encoding="utf-8")
     film.update(stage="review", progress=1.0, checks=checks, error="", message="ready to watch" if checks["ok"] else "ready, but some checks need a look",
                 thumb=bool(thumb))
 
@@ -253,12 +304,21 @@ def run_all(film, settings, ask_llm=None, quality="looks"):
     with FilmLock():
         try:
             while film.meta["stage"] in steps:
-                if film.meta["stage"] == "new" and ask_llm is None:
+                stage = film.meta["stage"]
+                if film.meta.get("gates") and stage in GATES and stage not in film.meta.get("approved", []):
+                    film.update(message=GATE_TEXT[stage], progress=1.0, error="")
+                    return
+                if stage == "new" and ask_llm is None:
                     raise RuntimeError("no script writer is available")
-                steps[film.meta["stage"]]()
+                steps[stage]()
         except Exception as err:
             film.update(error=f"{type(err).__name__}: {err}", message="stopped: " + str(err)[:200])
             raise
+
+
+def approve_gate(film, stage):
+    """The person has looked at this stop (the script, or the storyboard): the next run goes past it."""
+    film.update(approved=sorted(set(film.meta.get("approved", [])) | {stage}), error="")
 
 
 def approve(film):
@@ -284,7 +344,8 @@ def main(args):
     s = e.load_settings()
     cmd = args[0] if args else "help"
     if cmd == "new":
-        f = new_film(" ".join(a for a in args[1:] if not a.isdigit()), int(next((a for a in args[1:] if a.isdigit()), 9)))
+        f = new_film(" ".join(a for a in args[1:] if not a.isdigit() and a != "--gates"), int(next((a for a in args[1:] if a.isdigit()), 9)),
+                     gates="--gates" in args)
         print(f.id)
         return 0
     if cmd in ("all", "script", "voice", "build", "render", "finish"):

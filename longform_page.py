@@ -23,7 +23,7 @@ IDEAS = ["What if money disappeared for one week?", "What if every lie came with
          "What if you could replay any day of your life?", "What if nobody could ever forget a face?"]
 TONE = {"new": "plain", "screenplay": "info", "voiced": "info", "built": "info", "rendered": "info", "review": "warn",
         "approved": "ok", "rejected": "bad", "posted": "ok"}
-WORDS = {"new": "waiting for a screenplay", "screenplay": "screenplay written", "voiced": "voices recorded", "built": "ready to render",
+WORDS = {"new": "writing the script", "screenplay": "screenplay written", "voiced": "voices recorded", "built": "ready to render",
          "rendered": "picture rendered", "review": "ready to watch", "approved": "approved", "rejected": "rejected", "posted": "posted"}
 
 
@@ -97,11 +97,11 @@ class LongVideoPage:
             G.label(self.lf_detail, "No films yet. Click New film.", 14, G.C["muted"]).pack(anchor="w", padx=8, pady=20)
             return
         m = f.meta
-        box, inner, head = self.section(self.lf_detail, (m.get("title") or f.id)[:44])
+        box, inner, head = self.section(self.lf_detail, "Status")
         box.pack(fill="x", pady=(0, 12))
-        self.lf_badge = G.badge(head, WORDS.get(m["stage"], m["stage"]), TONE.get(m["stage"], "plain"))
-        self.lf_badge.pack(side="right")
-        G.label(inner, m.get("title") or f.id, 12, G.C["faint"], wrap=640).pack(anchor="w", pady=(0, 6))
+        G.label(inner, m.get("title") or f.id, 16, weight="bold", wrap=640).pack(anchor="w")
+        self.lf_badge = G.badge(inner, WORDS.get(m["stage"], m["stage"]), TONE.get(m["stage"], "plain"))
+        self.lf_badge.pack(anchor="w", pady=(6, 8))
         self.lf_msg = G.label(inner, "", 13, G.C["muted"], wrap=700)
         self.lf_msg.pack(anchor="w")
         self.lf_bar = ctk.CTkProgressBar(inner, height=8, fg_color=G.C["field"], progress_color=G.C["primary"])
@@ -114,10 +114,15 @@ class LongVideoPage:
         self.lf_progress()
         if f.screenplay.exists():
             self.lf_cast(f)
+            self.lf_brief(f)
+        if m.get("storyboard") or m.get("plan_checks"):
+            self.lf_storyboard(f)
         if m.get("checks"):
             self.lf_checks(m["checks"])
         if f.screenplay.exists():
             self.lf_vids(f)
+        if (f.dir / "manifest.json").exists():
+            self.lf_record(f)
         if m["stage"] in ("approved", "posted"):
             self.lf_post(f)
 
@@ -137,9 +142,10 @@ class LongVideoPage:
             add("Stop", self.lf_stop, "danger")
             return
         if m["stage"] in ("new", "screenplay", "voiced", "built", "rendered"):
+            waiting = m.get("gates") and m["stage"] in lf.GATES and m["stage"] not in m.get("approved", [])
             self.lf_draft = ctk.BooleanVar(value=False)
-            add("Continue making it", self.lf_continue, "primary")
-            ctk.CTkCheckBox(row, text="Quick draft picture", variable=self.lf_draft, font=G.font(12), text_color=G.C["muted"]).pack(side="left", padx=(0, 8))
+            add(lf.GATE_BUTTON[m["stage"]] if waiting else "Continue making it", self.lf_approve if waiting else self.lf_continue, "primary")
+            ctk.CTkCheckBox(row.master, text="Quick draft picture", variable=self.lf_draft, font=G.font(12), text_color=G.C["muted"]).pack(anchor="w", pady=(10, 0))
         if m["stage"] in ("review", "approved", "posted"):
             add("Watch", lambda: os.startfile(str(f.dir / "out" / "final.mp4")), "primary" if m["stage"] == "review" else "secondary")
         if m["stage"] == "review":
@@ -158,6 +164,49 @@ class LongVideoPage:
         G.label(inner, f"Narrator: {sp['narrator']['voice']} voice", 13, G.C["muted"]).pack(anchor="w")
         for c in sp["cast"]:
             G.label(inner, f"{c['name']}: {c['role']} ({c['voice']})", 13).pack(anchor="w", pady=1)
+
+    def lf_brief(self, f):
+        sp = sc.load(f.screenplay)
+        brief, claims = sp.get("brief") or {}, sc.claims(sp)
+        if not brief.get("question") and not claims:
+            return
+        box, inner, _ = self.section(self.lf_detail, "Brief and claims", "read before approving")
+        box.pack(fill="x", pady=(0, 12))
+        for name, key in (("Question", "question"), ("Angle", "angle"), ("Takeaway", "takeaway"), ("Opening image", "first_frame")):
+            if brief.get(key):
+                G.label(inner, f"{name}: {brief[key]}", 13, wrap=700).pack(anchor="w", pady=1)
+        if brief.get("titles"):
+            G.label(inner, "Title options: " + "  |  ".join(brief["titles"]), 12, G.C["muted"], wrap=700).pack(anchor="w", pady=(6, 2))
+        if claims:
+            check = [c for c in claims if c[3]]
+            G.label(inner, f"Claims the writer listed: {len(claims)}, {len(check)} marked to check. Verify before you approve.", 13, weight="bold",
+                    wrap=700).pack(anchor="w", pady=(10, 2))
+            for _, title, claim, flagged in check + [c for c in claims if not c[3]][:10]:
+                G.label(inner, ("CHECK  " if flagged else "") + f"{title}: {claim}", 12, G.TONES["warn" if flagged else "plain"][1], wrap=700).pack(anchor="w", pady=1)
+
+    def lf_storyboard(self, f):
+        box, inner, _ = self.section(self.lf_detail, "Storyboard", "one frame from every scene, made before the long render")
+        box.pack(fill="x", pady=(0, 12))
+        sheet = f.dir / "out" / "storyboard.jpg"
+        if sheet.exists():
+            from PIL import Image
+            img = Image.open(sheet)
+            self.lf_img = ctk.CTkImage(light_image=img, dark_image=img, size=(700, int(img.height * 700 / img.width)))
+            pic = ctk.CTkLabel(inner, image=self.lf_img, text="", cursor="hand2")
+            pic.pack(anchor="w", pady=(0, 6))
+            pic.bind("<Button-1>", lambda e: os.startfile(str(sheet)))
+        for c in (f.meta.get("plan_checks") or {}).get("checks", []):
+            G.label(inner, ("OK   " if c["ok"] else "LOOK ") + f"{c['name']}: {c['detail']}", 13, G.TONES["ok" if c["ok"] else "warn"][1], wrap=700).pack(anchor="w")
+
+    def lf_record(self, f):
+        man = json.loads((f.dir / "manifest.json").read_text(encoding="utf-8"))
+        box, inner, _ = self.section(self.lf_detail, "What went into this film", "for your records")
+        box.pack(fill="x", pady=(0, 12))
+        rows = (("Script", man["script"]), ("Voices", ", ".join(f"{k}: {v}" for k, v in man["voices"].items())), ("Picture", man["picture"]),
+                ("Sound effects", man["sound_effects"]), ("Music", "; ".join(f"{m['file']} ({m['source']})" for m in man["music"]) or "none"),
+                ("Generated clips", ", ".join(man["generated_clips"]) or "none"), ("Before you upload", man["disclosure"]))
+        for name, text in rows:
+            G.label(inner, f"{name}: {text}", 12, G.C["muted"], wrap=700).pack(anchor="w", pady=1)
 
     def lf_checks(self, checks):
         box, inner, _ = self.section(self.lf_detail, "Automatic checks")
@@ -242,6 +291,13 @@ class LongVideoPage:
             self.lf_view = None
             self.refresh_long_video()
 
+    def lf_approve(self):
+        """The person has read the script or looked at the storyboard: go past that stop."""
+        film = self.lf_film
+        lf.approve_gate(film, film.meta["stage"])
+        self.lf_view = None
+        self.lf_continue()
+
     def lf_continue(self):
         film = self.lf_film
         if self.lf_running() or lf.busy():
@@ -272,14 +328,17 @@ class LongVideoPage:
         G.option(row, minutes, ["8", "9", "10"], 80).pack(side="left", padx=(8, 20))
         G.label(row, "Characters", 12, G.C["muted"]).pack(side="left")
         G.option(row, cast, ["4", "5"], 80).pack(side="left", padx=8)
+        gates = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(frm, text="Pause for my review: after the script, and after the storyboard", variable=gates, font=G.font(12),
+                        text_color=G.C["muted"]).pack(anchor="w", pady=(0, 10))
         G.label(frm, "The script is written by your Claude, then voiced and animated. Expect about half an hour of waiting "
                      "(the PC stays usable). Nothing is posted.", 12, G.C["faint"], wrap=520).pack(anchor="w", pady=(0, 14))
 
         def go():
-            text = topic.get().strip()
+            text, pause = topic.get().strip(), gates.get()
             top.destroy()
             if text:
-                film = lf.new_film(text, int(minutes.get()), int(cast.get()))
+                film = lf.new_film(text, int(minutes.get()), int(cast.get()), pause)
                 self.lf_view = None
                 self.refresh_long_video()
                 self.lf_tree.selection_set(film.id)

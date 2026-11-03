@@ -4,9 +4,11 @@ Main-engine Python (ffmpeg + Pillow). Nothing here renders; longform.py calls it
 import json
 import re
 import textwrap
+from datetime import datetime
 from pathlib import Path
 
 import footage
+import lf_voice
 
 LIMITS = {"min": 470.0, "max": 625.0}
 TARGET_LUFS = (-16.0, -12.0)
@@ -36,6 +38,42 @@ def check_film(path, expected=None):
         rows.append(("matches the plan", abs(dur - expected) < 3.0, f"{dur:.1f} s against {expected:.1f} s planned"))
     checks = [{"name": n, "ok": bool(ok), "detail": d} for n, ok, d in rows]
     return {"ok": all(c["ok"] for c in checks), "checks": checks, "seconds": round(dur, 1)}
+
+
+def check_plan(scenes, sp):
+    """Checks on the plan, before anything is rendered: what is worth knowing before a half-hour render."""
+    total = sum(s["dur"] for s in scenes)
+    speakers = {b["who"] for s in sp["scenes"] for b in s["beats"]}
+    silent = [c["name"] for c in sp["cast"] if c["id"] not in speakers]
+    odd = [s["id"] for s in scenes if not 6 <= s["dur"] <= 80]
+    longest = max((len(c["text"]) for s in scenes for c in s["caps"]), default=0)
+    unsure = sum(1 for s in sp["scenes"] for f in s.get("facts", []) if f["check"])
+    rows = [("length", LIMITS["min"] <= total <= LIMITS["max"], f"{stamp(total)} planned (wanted 8-10 minutes)"),
+            ("every character speaks", not silent, ("silent: " + ", ".join(silent)) if silent else f"all {len(sp['cast'])} characters speak"),
+            ("scene lengths", not odd, ("odd length in " + ", ".join(odd)) if odd else "every scene runs 6 to 80 seconds"),
+            ("captions fit", longest <= 100, f"the longest caption has {longest} characters"),
+            ("claims", unsure == 0, f"{unsure} claim(s) marked 'check': verify them before approving" if unsure else "no claim is marked uncertain")]
+    checks = [{"name": n, "ok": bool(ok), "detail": d} for n, ok, d in rows]
+    return {"ok": all(c["ok"] for c in checks), "checks": checks, "seconds": round(total, 1)}
+
+
+def manifest(sp, scenes, music, meta):
+    """What went into a film, for the review page and for later questions about rights: voices, music with its licence
+    note, generated clips, the claims the writer listed, and what YouTube's disclosure question is about."""
+    voice_of = {"narrator": "narrator-" + sp["narrator"]["voice"], **{c["id"]: c["voice"] for c in sp["cast"]}}
+    label = {"narrator": "Narrator", **{c["id"]: c["name"] for c in sp["cast"]}}
+    return {"title": sp["title"], "made": datetime.now().isoformat(timespec="seconds"), "seconds": meta.get("seconds"),
+            "script": "written by the LLM set in MoneyPrinterTurbo (Claude by default); a person approves it",
+            "voices": {label[k]: lf_voice.VOICE_MAP[v][0] for k, v in voice_of.items()},
+            "picture": "drawn in code and rendered with HyperFrames" + (f" in {int(meta['render_seconds'] // 60)} min" if meta.get("render_seconds") else "")
+                       + "; no stock footage, no real people",
+            "sound_effects": "synthesised from noise and sine waves; nothing downloaded",
+            "music": [{"file": n, "source": s} for n, s in music],
+            "generated_clips": [s["id"] for s in scenes if s.get("clips")],
+            "claims": [{"scene": sid, "claim": c, "check": chk} for sid, _, c, chk in
+                       [(s["id"], s["title"], f["claim"], f["check"]) for s in sp["scenes"] for f in s.get("facts", [])]],
+            "disclosure": "The characters are cartoons and the voices are AI. YouTube's altered-or-synthetic-content question is about "
+                          "realistic depictions of real people, places or events: none of this film is, but a real-looking Veo clip would be."}
 
 
 def chapters(scenes_plan, screenplay):
