@@ -1866,6 +1866,8 @@ def self_test():
         finally:
             QUOTA.update(reset_day=1, meter_used=0, meter_date=None)
             set_base(HERE)
+    import lf_tests
+    lf_tests.run()
     print("self-test passed")
 
 
@@ -1930,6 +1932,9 @@ def run_command(args):
         return 0
     if "--doctor" in args:
         return doctor()
+    if "--longform" in args:                  # long films: their own lock, so a long render never holds up the uploads
+        import longform
+        return longform.main(args[args.index("--longform") + 1:])
     if "--dry-run" in args:
         return run("dry")
     if "--audition" in args:                  # a mastered sample of each good free voice, to choose by ear

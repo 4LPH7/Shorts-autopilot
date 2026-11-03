@@ -1,0 +1,9 @@
+#root { position: absolute; inset: 0; overflow: hidden; background: #0f1530; font-family: 'Nunito', sans-serif; }
+#root .cam { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+#root .layer { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+#root .layer svg { position: absolute; left: 0; top: 0; }
+#root .cards { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 10; }
+#root .capbox { position: absolute; left: 0; bottom: 110px; width: 1920px; height: 0; z-index: 20; }
+#root .cp { position: absolute; left: 0; right: 0; bottom: 0; text-align: center; opacity: 0; }
+#root .cp span { display: inline-block; max-width: 1500px; padding: 10px 28px; border-radius: 16px; background: rgba(10, 12, 30, .72); color: #fff; font-weight: 800; font-size: 44px; line-height: 1.25; }
+#root .cover { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 30; }

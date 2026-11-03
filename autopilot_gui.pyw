@@ -31,6 +31,7 @@ except ImportError:  # MPT updates (uv sync) can remove it; say how to fix inste
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import daily_shorts as eng  # noqa: E402
+import longform_page  # noqa: E402
 
 TASK = "MPT Daily Shorts"
 RUN_BAT = HERE / "run_daily.bat"
@@ -61,7 +62,7 @@ UPLOAD_STEPS = (
     ("I uploaded it: mark as done", "Files the video as posted and moves on to the next one."),
 )
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-PAGES = ("Dashboard", "Review", "Upload", "History", "Music", "Clips", "Settings", "Setup", "Logs")
+PAGES = ("Dashboard", "Review", "Upload", "History", "Long video", "Music", "Clips", "Settings", "Setup", "Logs")
 
 # ---- Dark theme: warm near-black surfaces, one light accent, muted semantic tones ----------
 C = {
@@ -261,7 +262,10 @@ def set_text(box, text, readonly=False):
 
 # ---- App -----------------------------------------------------------------------------
 
-class App:
+longform_page.G = sys.modules[__name__]           # the Long video page uses this file's look (label, button, C, ...)
+
+
+class App(longform_page.LongVideoPage):
     def __init__(self, root):
         self.root = root
         self.q = queue.Queue()
@@ -295,11 +299,12 @@ class App:
             page.grid(row=0, column=0, sticky="nsew", padx=28, pady=(22, 18))
             self.tabs[name] = page
         for name in PAGES:
-            getattr(self, f"build_{name.lower()}")()
+            getattr(self, f"build_{name.lower().replace(' ', '_')}")()
         self.show("Dashboard")
 
         root.bind("<Control-r>", lambda e: self.refresh_all())
         self.root.after(100, self.poll_queue)
+        self.root.after(2000, self.lf_poll)
         self.refresh_all()
         self.root.after(30000, self.auto_refresh)
 
@@ -473,6 +478,7 @@ class App:
         self.refresh_history()
         self.refresh_music()
         self.refresh_clips()
+        self.refresh_long_video()
         if self.page == "Logs":
             self.refresh_logs()
         if not lists_only:

@@ -28,6 +28,7 @@ A dark-themed Windows app (CustomTkinter) that runs a faceless YouTube Shorts ch
 - **Copyright-safe music:** only tracks you've approved are used, otherwise voice only. 8 upbeat Mixkit tracks come ready to use. The AI picks the best fit for each video (or you fix one track, or swap the music per video in Review). See [SAFETY.md](SAFETY.md).
 - **Approval required:** nothing is posted until you approve it.
 - **Quota-aware schedule:** the remaining uploads are spread over the remaining run times of the month.
+- **Long films:** the **Long video** page makes an 8-10 minute animated story with a narrator and 4-5 talking cartoon characters, explanation cards and a full sound mix, rendered with HyperFrames. See [Long videos](#long-videos).
 
 ## Requirements
 
@@ -68,6 +69,7 @@ Later, open the app from the desktop shortcut or **`Shorts Autopilot.bat`**.
 | **Review** | Videos waiting for approval, each with a thumbnail, a ▶ Play button, the script, the voice used, the result of the automatic **quality checks** (*all passed* or what to look at), and an editable **YouTube title, description and tags**. **Approve** moves it to the upload queue. **Reject** asks *why* (a reason is required), deletes the video and keeps your reason to [teach future videos](#learning-from-your-rejections). **♪ Change music...** swaps the track of one video and redoes only the final mix (about a minute). The approved queue shows the upload order, and **Back to review** pulls one out. |
 | **Upload** | Your approved videos, ready to post by hand in four clicks: see [Manual uploads](#manual-uploads). Shows whether uploads are automatic or manual right now and why. |
 | **History** | Every upload (it counts against the quota), with status and Upload-Post request id. Uploads with an unclear outcome show under **Needs checking**: look in YouTube Studio, then mark **It's live** or **Not uploaded**. **Rejected videos** lists every rejection with your reason, and **What it learned...** shows the rules future videos follow. |
+| **Long video** | Make, watch and approve 8-10 minute animated films: start one from a question, follow its progress, **Watch**, **Approve** or **Reject...** it, bring in clips made in Google Vids and copy the title, description and tags for a hand upload. See [Long videos](#long-videos). |
 | **Music** | Your approved tracks with their mood tags (the AI uses the tags to match a track to each video). **▶ Listen** plays one. **Add track...** asks for the source, mood tags and a license confirmation. No tracks means voice-only videos. |
 | **Clips** | Your own clip library: footage you download by hand from Mixkit, Vidsplay or Coverr. Add each with a source and a few tags, and the picker considers it whenever the tags match a scene. |
 | **Settings** | Niche, language, voice, **voice speed**, script rules, uploads per month, run times, number of videos to keep waiting, **music mode** (AI best fit / always one track / none), music volume, **narration and sound** (voice engine, voice, mastering, sound effects, an **Audition voices** button), **look and motion** (camera moves, colour grade, highlight colour), upload mode, quota cycle, cache cleanup, YouTube privacy. Changing the run times re-registers the schedule. You can also pause or resume the schedule here. |
@@ -139,6 +141,22 @@ A reminder under the button lists the two answers YouTube asks for: **altered or
 
 **Scheduled runs have no window.** Task Scheduler starts `run_hidden.pyw` (through `pythonw`), which starts `run_daily.bat` hidden. A visible console window can be closed or Ctrl+C'd, and that silently killed runs on 2026-11-03, one of them in the middle of an upload (`logs/crash.log`: `window-CLOSE event`). The run also asks Windows not to sleep while it works. An upload that still gets cut off is moved to **Needs checking** by the next run: it is never retried on its own, so a video can't post twice. After updating from an older version, click **Setup → Daily schedule → Register or repair** (and run `schedule_uploads.ps1` again for any one-time upload tasks) so the tasks use the hidden launcher.
 
+## Long videos
+
+The **Long video** page makes an 8-10 minute animated story in the style of the "What if..." explainers: a narrator, 4-5 cartoon characters who really talk, and explanation cards (a number counting up, a chart drawing itself, a notebook list, myth against reality). You give it a question; it does the rest, and nothing is posted until you approve it.
+
+1. **Screenplay.** Your Claude (the writer the Shorts use) writes a concept, a cast of 4-5 characters (look, personality, voice) and 14-18 scenes, then the lines of each scene with stage directions: mood, gesture, camera shot, explanation card. Open **Edit screenplay** to change anything by hand.
+2. **Voices.** Every character has a different Microsoft neural voice and the narrator has another. Every line is spoken on its own; the cartoon mouths follow the loudness of the audio.
+3. **Picture.** The screenplay becomes a [HyperFrames](https://github.com/heygen-com/hyperframes) project (HTML, SVG and GSAP, so every frame is exactly reproducible): flat-vector rooms, puppets that blink, breathe, walk, point, shrug and hop, camera moves between wide, medium, two-shot and close-up, captions with the speaker's name. 1920x1080 at 30 fps.
+4. **Sound.** Voices mastered, sound effects synthesised on the cuts and big numbers, one or two of your approved music tracks (calm ones first) crossfaded and ducked under the voice, loudness matched to YouTube.
+5. **Checks and thumbnail.** Length, picture size, loudness, dead air and black frames are checked, a 1280x720 thumbnail is made, and the title, description (with chapter timestamps) and tags are ready to copy.
+
+A 9-minute film takes roughly 30-40 minutes on this PC: about 10 for the script, a few for the voices, 15-20 for the picture (three Chrome workers at below-normal priority, so the PC stays usable). A stopped film continues from where it stopped. Long films have their own lock, so they never hold up the scheduled uploads, and they are never posted automatically: **Upload by hand** gives the copy buttons, like the Upload page.
+
+**Google Vids.** Vids has no API, so the app cannot drive it; this part is by hand. The screenplay marks up to three scenes where a cinematic 8-second cutaway would help and writes the prompt. On the page: **Copy prompt**, **Open Google Vids** (Blank, then Veo), generate, download the MP4 (File, Download), then **Import clip...**. The scene is rendered again with the clip over the animation (the voices are kept). Without a clip the scene stays animated. Personal accounts get about 10 generations a month at no cost; the app never signs in to Google for you.
+
+Set up once by `install.bat` (needs Node.js 22 or newer): `cd longform` and `npm install --ignore-scripts`. HyperFrames fetches its font (Nunito, from Google Fonts) and its own headless Chrome the first time; its usage telemetry is switched off for every render. Everything a film makes lives in `longform/films/<film>/` (git-ignored).
+
 ## Files and folders
 
 ```
@@ -161,6 +179,12 @@ shorts-autopilot/
 ├─ backup/                  originals kept before a fix such as --fix-loudness (git-ignored)
 ├─ motion.py                captions that follow the voice, camera moves, look, ducked mix
 ├─ schedule_uploads.ps1     registers one-time "post the next approved video" tasks
+├─ longform.py              long films: stages, render, mix, checks (folder per film in longform/films)
+├─ longform_page.py         the Long video page of the app
+├─ lf_screenplay.py         the long-film writer: concept, cast, scenes, beats, and the vocabulary the animation knows
+├─ lf_plan.py               screenplay + voice timings -> scenes (shots, cards, captions); lf_build.py writes the HyperFrames project
+├─ lf_voice.py              one voice per character (runs in .venv-audio); lf_audio.py mixes; lf_finish.py checks, thumbnail, upload text
+├─ longform/kit/            the scene kit: rooms.js, rig.js (the puppet), acts.js, cards.js, stage.js, base.css
 ├─ env.example.bat          → env.bat (your MPT folder; not committed)
 ├─ safe_music/SOURCES.txt   approved music list with mood tags (audio files are not committed)
 ├─ clips/SOURCES.txt        your own clip library list (video files are not committed)
@@ -243,6 +267,8 @@ run_daily.bat --doctor     :: JSON health report
 run_daily.bat --upload-next :: post the oldest approved video now (respects quota and mode), never renders
 run_daily.bat --audition   :: ten voices read the same lines: samples\voices\*.mp3, to choose by ear
 run_daily.bat --fix-loudness :: match the audio of older videos in review/approved to -14 LUFS (picture untouched, originals kept in backup\)
+run_daily.bat --longform new "What if ...?" 9  :: start a long film folder (prints its id); then:
+run_daily.bat --longform all <film id>         :: do whatever is left (--draft for a quick picture); also: script, voice, build, render, finish
 python daily_shorts.py --self-test      :: logic tests (no MPT needed)
 python autopilot_gui.pyw --screenshot out.png [Tab]   :: app smoke test
 ```
@@ -321,6 +347,7 @@ The checks (`motion.check_ass`) allow at most two text sizes, one accent colour,
 | "Pexels key issuance paused" | Use Pixabay (the default here). |
 | Footage doesn't fit | Reject the video and say what was wrong (Footage reason): the lesson is applied to the next shot plans. Add better clips in the **Clips** tab, or a Coverr key in Setup for more candidates. |
 | "Vision pick failed" in the log | The Claude CLI couldn't read the contact sheets (not installed, not logged in, or usage limit). The first search result is used instead, so videos still finish but match less well. |
+| A long film stops with an error | The error is shown on the Long video page and in Logs. **Continue making it** picks up at the step that failed. "HyperFrames isn't installed": run `npm install --ignore-scripts` in the `longform` folder (needs Node.js 22+). "Another long film is being made": only one at a time. A voice error means Edge's online voices couldn't be reached: try again when the network is back. |
 | An upload is in **Needs checking** | The connection dropped mid-upload, or the run was stopped during it (PC shut down, process killed). Look in YouTube Studio, then click *It's live* or *Not uploaded*. It's never retried automatically, so you don't get double posts. |
 | `crash.log` says `window-CLOSE event`, or Task Scheduler's last result is 3221225786 (0xC000013A) | The run's console window was closed or Ctrl+C'd. Click **Setup → Daily schedule → Register or repair** so runs use the hidden launcher (no window to close). If it hit an upload, see *Needs checking* above. |
 | A Short got a copyright claim | See [SAFETY.md](SAFETY.md): remove the track in the Music tab and fix the video in Studio. |

@@ -45,6 +45,14 @@ echo Downloading the Whisper speech model, about 460 MB ...
 popd
 
 echo.
+echo Setting up the long-video renderer (HyperFrames, needs Node.js 22 or newer) ...
+where node >nul 2>&1 && (
+    pushd "%HERE%longform"
+    call npm install --ignore-scripts --no-audit --no-fund
+    popd
+) || echo Node.js was not found: the Long video page needs it (https://nodejs.org). Everything else works without it.
+
+echo.
 echo Done. Opening Shorts Autopilot - finish the Setup tab (keys, Upload-Post, schedule).
 call "%HERE%Shorts Autopilot.bat"
 endlocal

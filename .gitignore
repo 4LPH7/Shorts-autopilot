@@ -28,3 +28,8 @@ upload_state.json
 samples/
 .venv-audio/
 models/
+
+# long films: generated per film (screenplay, voices, HyperFrames project, renders) and the renderer's npm packages
+longform/films/
+longform/node_modules/
+longform/_*
