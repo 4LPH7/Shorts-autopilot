@@ -266,7 +266,66 @@ These apply to every niche, script and visual style, including future upgrades:
 - **Every factual claim has a source note**, and a human checks it before approval.
 - **Emotion is shaped by evidence.** Hooks can be strong, but a hook may not state a claim the script cannot support.
 
+## Video-informed strategy addendum (2026-11-03)
+
+The two creator videos point to different channel strategies. Use their production ideas as hypotheses to test against this channel's own audience; do not treat their revenue claims or format opinions as guarantees.
+
+### What to take from each reference
+
+| Reference | Useful signal | How this project should use it |
+|---|---|---|
+| [Marcel Stummer: “How I Made $201,447 Uploading YouTube Shorts”](https://www.youtube.com/watch?v=l3ElVxAOgIg) | The title claims $201,447, and the description says the creator reached almost 2 billion views on one Shorts channel. These are creator-reported outcomes, not independently verified results. The video's transcript/tactical sections were not available during this review. | Treat it only as evidence that a Shorts-first channel can have reach. Do not infer its posting schedule, script formula, or revenue per view from the title and description. Revisit those tactics if a transcript is supplied. |
+| [Dave Nick Business: “$400,784.99 from 1 faceless channel w/ Claude AI”](https://www.youtube.com/watch?v=T7NI2eyr22s) | The video's chapters cover niche choice, combining validated markets and formats (“niche quilting”), research, retention-focused scripts, simple animation, creator voice, packaging, analytics, comments, chapters, and the limits of automation. It also argues against Shorts and promotes longer videos. Its earnings and advice are the creator's claims. | Adopt topic validation, original research, title/thumbnail planning, voice-first editing, simple purposeful visuals, and an analytics feedback loop. Treat its long-form and monetization advice as a hypothesis, not a mandate. Study title structures for patterns; write original titles and scripts. |
+
+### Format decision: keep Shorts, run a separate long-form pilot
+
+The first video is Shorts-focused; the second favors long-form and says not to post Shorts. That conflict cannot be settled by either creator's anecdote. Keep the current product's primary workflow as vertical Shorts of at least one minute, and evaluate long-form as a distinct experiment. Do not extend a script to 25 minutes just to meet the second video's suggested length.
+
+1. Produce a small set of 60–90 second Shorts using the current pipeline and a consistent topic area.
+2. Once those scripts and research notes work, select one topic with enough genuinely useful material for an 8–12 minute landscape pilot. Add a separate 16:9 render profile only if the pilot proves worth continuing.
+3. Compare each format against its own goal and its own analytics; don't compare Shorts views directly with long-form views or revenue claims from other channels.
+4. Expand the long-form runtime only when the material and the pilot's retention support it. Chapters and list structures should help viewers navigate real information, not pad runtime.
+
+### Ranked practices to apply
+
+1. **Validate the topic and its audience.** Combine a real audience question or recurring problem with a format viewers already understand. Review relevant channel performance and public comments for unanswered questions. Preserve the evidence and write a fresh angle; do not copy a competitor's topic treatment, title, script, or visuals.
+2. **Package before scripting.** Draft a few accurate titles and a thumbnail/frame-one concept. The first spoken line and opening visual should immediately deliver on the promise. Drop any package that needs an exaggerated claim to get attention.
+3. **Build a compact retention arc.** For Shorts, use a clear hook, a specific question or tension, two or three evidence-backed beats, a concrete visual metaphor/example, and a satisfying takeaway. Keep an open loop only when the video resolves it. Remove repeated points and generic setup.
+4. **Write for a human voice.** Prefer a creator-recorded take for the pilot when available. Otherwise use the existing voice options and compare short auditions. Keep conversational contractions, breaths, pauses, and emphasis; trim dead air by listening to the recording, not by cutting every pause. Do not speed the read to hit a word count.
+5. **Map each spoken beat to a visual.** Keep the current stock/local library, but use simple custom diagrams, animated text, and restrained AI animation when those make an abstract idea easier to understand. Match scenes to the actual narration; vary movement and sound cues only where motivated. Treat generated scenes as illustration, never as evidence.
+6. **Diagnose performance before changing the whole format.** For Shorts, review “How many chose to view,” engaged views, retention, and audience response. For long-form, review impressions, click-through rate, average view duration, and retention. Read these together and compare against the channel's own baseline, not a universal benchmark. YouTube Studio documents these reports in [Shorts analytics](https://support.google.com/youtube/answer/12942217) and [video analytics](https://support.google.com/youtube/answer/12942217?co=YOUTUBE).
+7. **Keep monetization optional and audience-led.** A useful PDF or other product is a later experiment after comments show a recurring need. Do not add a product pitch to every video or plan revenue using the creator's reported figures.
+8. **Keep a human responsible for each release.** Automation can prepare drafts and renders; a person still checks claims, rights, voice, pacing, and the final cut. This matches the second video's own warning that a channel is not hands-off.
+
+### First pilot: explain the viral “psychological hooks” checklist
+
+Use the user's earlier checklist as a case study in persuasive framing, not as a proven psychological taxonomy or a targeting guide. A possible angle is: **“That viral list says every group buys a different promise. Here's what it gets right—and what it oversimplifies.”**
+
+- **Research:** Find credible sources for the examples used; label the demographic-to-emotion mapping as a viral checklist unless independent evidence supports a specific claim. Separate marketing examples from established psychological findings.
+- **Narrative:** Open with the familiar promise (“peace, status, hope, belonging”), then explain how a marketer frames an offer around a hoped-for benefit or feared loss. Show two or three everyday, sourced examples, point out where the checklist overgeneralizes, and end with a viewer-protective question: “What is this message asking me to feel before I decide?”
+- **Voice:** Record one natural read if possible. Otherwise audition the current providers on the same paragraph. Pick the take that sounds clear and warm at a relaxed pace, then time captions and scene cuts from that final audio.
+- **Visuals:** Use one recurring visual device (for example, a promise card that turns over to reveal the actual product), restrained kinetic type, and specific footage or diagrams. Avoid assigning emotions to a demographic as if every person in that group responds identically.
+- **Length and edit:** Target 60–90 seconds based on the finished narration, with no filler. Use a strong first frame, readable captions in safe zones, and a closing line that resolves the opening.
+
+### Updated execution sequence
+
+**Step A — Topic and package brief.** Add a lightweight brief to the episode plan: audience question, original angle, supporting links/claims, three title options, first-frame idea, intended viewer takeaway, and any unsupported claims to remove. Human approves it before script generation.
+
+**Step B — Script and voice proof.** Generate one short script in the structure above, then audition the same paragraph in a recorded human take and the current available voices. Select the voice, revise awkward phrasing, and verify the measured length from the audio. Keep the existing 60–75 second acceptance window for the current Shorts path; use 60–90 seconds as the pilot's editorial target.
+
+**Step C — Beat-to-visual sheet.** For each spoken beat, record its exact narration range, visual purpose, source/license, and whether it needs stock, local footage, a diagram, or optional generated animation. Review for literal scene-to-line fit before render.
+
+**Step D — Make and review a six-Short pilot.** Produce six distinct videos across a small number of related topics. Change one major editorial variable at a time (hook framing, story example, or visual treatment), preserve the source notes, and review every export in the existing approval queue. Use Studio performance after enough impressions/views accrue; small samples are directional, not proof.
+
+**Step E — Decide whether long-form earns a lane.** Use the best-supported pilot topic to make one 8–12 minute landscape companion only if its research supports that depth. Track the extra authoring/render/review time as well as audience response. Continue to a longer runtime or build the 16:9 workflow only if this pilot demonstrates value.
+
+**Step F — Refine and repeat.** Diagnose weak openings, unclear packaging, retention dips, mismatched visuals, and voice issues separately. Change one part at a time and keep the current script, caption, voice, approval, and upload fallbacks intact.
+
 ## Research references
+
+- [Marcel Stummer Shorts case-study video](https://www.youtube.com/watch?v=l3ElVxAOgIg)
+- [Dave Nick Business faceless-channel video](https://www.youtube.com/watch?v=T7NI2eyr22s) and [published chapter/transcript summary](https://videohighlight.com/v/T7NI2eyr22s?view=defaultSummary)
+- [YouTube Studio analytics: Shorts and video reports](https://support.google.com/youtube/answer/12942217)
 
 - [Trendshift: AI video generation topic](https://trendshift.io/topics/ai-video)
 - [MoneyPrinterTurbo README](https://github.com/harry0703/MoneyPrinterTurbo/blob/main/README-en.md) and [editable local video project design](https://github.com/harry0703/MoneyPrinterTurbo/blob/main/docs/video-projects.md)
