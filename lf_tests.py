@@ -103,6 +103,10 @@ def run():
     man = lf_finish.manifest(sp, lf_plan.plan(sp, tm), [("a.mp3", "Mixkit free")], {"seconds": 12.0})
     assert man["voices"]["Narrator"] == "en-US-ChristopherNeural" and man["music"][0]["source"] == "Mixkit free" and man["generated_clips"] == []
     assert json.loads(json.dumps(man))["claims"][0]["check"] is True
+    stick = lf_plan.apply_style(sp, "stick")                                # the look is a per-film choice, never written into the script
+    assert all(c["look"]["style"] == "stick" for c in stick["cast"]) and all("style" not in c["look"] for c in sp["cast"])
+    assert all(c["look"]["style"] == "cartoon" for c in lf_plan.apply_style(sp, "bogus")["cast"]) and stick["scenes"] is sp["scenes"]
+    assert lf_plan.plan(stick, tm)[0]["cast"][0]["look"]["style"] == "stick"
     gates_test()
     print("long-film self-test passed")
 

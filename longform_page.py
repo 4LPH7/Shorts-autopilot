@@ -18,6 +18,7 @@ import longform as lf
 
 G = None
 VIDS_URL = "https://docs.google.com/videos/"
+STYLES = {"Cartoon people": "cartoon", "Stick figures": "stick"}          # how the characters are drawn (lf_plan.STYLES)
 IDEAS = ["What if money disappeared for one week?", "What if every lie came with a visible sign?",
          "What if you never needed to sleep again?", "What if everyone could see each other's net worth?",
          "What if you could replay any day of your life?", "What if nobody could ever forget a face?"]
@@ -328,6 +329,11 @@ class LongVideoPage:
         G.option(row, minutes, ["8", "9", "10"], 80).pack(side="left", padx=(8, 20))
         G.label(row, "Characters", 12, G.C["muted"]).pack(side="left")
         G.option(row, cast, ["4", "5"], 80).pack(side="left", padx=8)
+        look = ctk.StringVar(value=next(iter(STYLES)))
+        row2 = ctk.CTkFrame(frm, fg_color="transparent")
+        row2.pack(anchor="w", pady=(0, 14))
+        G.label(row2, "Look", 12, G.C["muted"]).pack(side="left")
+        G.option(row2, look, list(STYLES), 200).pack(side="left", padx=8)
         gates = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(frm, text="Pause for my review: after the script, and after the storyboard", variable=gates, font=G.font(12),
                         text_color=G.C["muted"]).pack(anchor="w", pady=(0, 10))
@@ -335,10 +341,10 @@ class LongVideoPage:
                      "(the PC stays usable). Nothing is posted.", 12, G.C["faint"], wrap=520).pack(anchor="w", pady=(0, 14))
 
         def go():
-            text, pause = topic.get().strip(), gates.get()
+            text, pause, style = topic.get().strip(), gates.get(), STYLES[look.get()]
             top.destroy()
             if text:
-                film = lf.new_film(text, int(minutes.get()), int(cast.get()), pause)
+                film = lf.new_film(text, int(minutes.get()), int(cast.get()), pause, style)
                 self.lf_view = None
                 self.refresh_long_video()
                 self.lf_tree.selection_set(film.id)

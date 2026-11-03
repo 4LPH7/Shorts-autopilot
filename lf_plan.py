@@ -14,6 +14,16 @@ FLOOR_Y = 944
 ACTORS = {"hop", "nod", "no", "shake", "sit", "stand"}
 
 
+STYLES = ("cartoon", "stick")
+
+
+def apply_style(sp, style):
+    """A copy of the screenplay with every character drawn in `style`: "cartoon" people or "stick" figures (an unknown name
+    means cartoon). The saved screenplay is untouched, so the same script can be filmed in either look."""
+    style = style if style in STYLES else "cartoon"
+    return {**sp, "cast": [{**c, "look": {**c["look"], "style": style}} for c in sp["cast"]]}
+
+
 def lines_of(sp):
     """Every beat as a voice line [{id, voice_type, text, scene}]; also stamps beat['line']."""
     voice = {c["id"]: c["voice"] for c in sp["cast"]}

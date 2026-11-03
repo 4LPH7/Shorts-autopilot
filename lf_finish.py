@@ -63,6 +63,7 @@ def manifest(sp, scenes, music, meta):
     voice_of = {"narrator": "narrator-" + sp["narrator"]["voice"], **{c["id"]: c["voice"] for c in sp["cast"]}}
     label = {"narrator": "Narrator", **{c["id"]: c["name"] for c in sp["cast"]}}
     return {"title": sp["title"], "made": datetime.now().isoformat(timespec="seconds"), "seconds": meta.get("seconds"),
+            "look": "stick figures" if meta.get("style") == "stick" else "cartoon people",
             "script": "written by the LLM set in MoneyPrinterTurbo (Claude by default); a person approves it",
             "voices": {label[k]: lf_voice.VOICE_MAP[v][0] for k, v in voice_of.items()},
             "picture": "drawn in code and rendered with HyperFrames" + (f" in {int(meta['render_seconds'] // 60)} min" if meta.get("render_seconds") else "")

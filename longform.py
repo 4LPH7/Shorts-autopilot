@@ -72,13 +72,14 @@ def slug(text):
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "film"
 
 
-def new_film(topic, minutes=9, cast_size=5, gates=False):
-    """gates=True: the run stops for the person after the script and after the storyboard (see GATES)."""
+def new_film(topic, minutes=9, cast_size=5, gates=False, style="cartoon"):
+    """gates=True: the run stops for the person after the script and after the storyboard (see GATES).
+    style: how the characters are drawn, "cartoon" people or "stick" figures (lf_plan.STYLES)."""
     folder = FILMS / f"{datetime.now():%Y%m%d-%H%M}-{slug(topic)}"
     folder.mkdir(parents=True)
     film = Film.__new__(Film)
     film.dir, film.meta = folder, {}
-    film.update(topic=topic, minutes=minutes, cast_size=cast_size, gates=gates, approved=[], stage="new", title=topic, message="",
+    film.update(topic=topic, minutes=minutes, cast_size=cast_size, gates=gates, style=style, approved=[], stage="new", title=topic, message="",
                 progress=0.0, error="", created=datetime.now().isoformat(timespec="seconds"))
     return film
 
@@ -155,7 +156,7 @@ def voice_film(film, rate=1.0):
 
 
 def build_film(film):
-    sp = sc.load(film.screenplay)
+    sp = lf_plan.apply_style(sc.load(film.screenplay), film.meta.get("style", "cartoon"))
     timings = {x["id"]: x for x in json.loads((film.dir / "voice" / "lines.json").read_text(encoding="utf-8"))}
     proj = film.dir / "project"
     vids = {}
@@ -344,8 +345,8 @@ def main(args):
     s = e.load_settings()
     cmd = args[0] if args else "help"
     if cmd == "new":
-        f = new_film(" ".join(a for a in args[1:] if not a.isdigit() and a != "--gates"), int(next((a for a in args[1:] if a.isdigit()), 9)),
-                     gates="--gates" in args)
+        f = new_film(" ".join(a for a in args[1:] if not a.isdigit() and a not in ("--gates", "--stick")), int(next((a for a in args[1:] if a.isdigit()), 9)),
+                     gates="--gates" in args, style="stick" if "--stick" in args else "cartoon")
         print(f.id)
         return 0
     if cmd in ("all", "script", "voice", "build", "render", "finish"):

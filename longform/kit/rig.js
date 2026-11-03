@@ -36,14 +36,21 @@
     const top = L.top || 'tee';
     const longSleeve = ['suit', 'hoodie', 'coat', 'uniform'].includes(top);
     const dress = top === 'dress';
+    const stick = L.style === 'stick';                    // line-art body, outlined head: same parts and pivots, so every act still works
+    const LINE = DARK, eyeEdge = stick ? `stroke="${LINE}" stroke-width="2.6"` : '';
     const hh = hair(L.hair || 'short', hc);
     const p = (n) => `id="${id}-${n}"`;
     const legs = ['L', 'R'].map((s) => {
+      if (stick) {
+        const x = s === 'L' ? -15 : 15, f = s === 'L' ? -34 : 34;
+        return `<g ${p('leg' + s)}><line x1="${x}" y1="-130" x2="${x}" y2="-18" stroke="${LINE}" stroke-width="10" stroke-linecap="round"/><line x1="${x}" y1="-14" x2="${f}" y2="-14" stroke="${LINE}" stroke-width="10" stroke-linecap="round"/></g>`;
+      }
       const x = s === 'L' ? -28 : 2;
       return `<g ${p('leg' + s)}>${rect(x, -130, 26, 108, dress ? sk : pants, 13)}${ell(x + 13 + (s === 'L' ? -4 : 4), -10, 22, 11, shoes)}</g>`;
     }).join('');
     const arms = ['L', 'R'].map((s) => {
       const x = s === 'L' ? -46 : 24, hx = s === 'L' ? -35 : 35;
+      if (stick) return `<g ${p('arm' + s)}><line x1="${hx}" y1="-224" x2="${hx}" y2="-170" stroke="${LINE}" stroke-width="9" stroke-linecap="round"/><g ${p('fore' + s)}><line x1="${hx}" y1="-170" x2="${hx}" y2="-116" stroke="${LINE}" stroke-width="9" stroke-linecap="round"/>${circ(hx, -110, 8, LINE)}</g></g>`;
       return `<g ${p('arm' + s)}>${rect(x, -230, 22, 62, col, 11)}<g ${p('fore' + s)}>${rect(hx - 9.5, -178, 19, 62, longSleeve ? col : sk, 9.5)}${circ(hx, -112, 10.5, sk)}</g></g>`;
     }).join('');
     let torso = path('M-37 -228C-40 -236 -30 -240 0 -240C30 -240 40 -236 37 -228L29 -130C10 -124 -10 -124 -29 -130z', col);
@@ -53,14 +60,25 @@
     if (top === 'apron') torso += path('M-24 -226L24 -226L28 -110L-28 -110z', '#f4f4f0');
     if (dress) torso = path('M-37 -228C-40 -236 -30 -240 0 -240C30 -240 40 -236 37 -228L60 -78C20 -68 -20 -68 -60 -78z', col);
     if (top === 'uniform') torso += rect(-34, -206, 68, 7, '#f2c14e');
+    if (stick) {                                          // a shoulder bar and neck in line colour, then the outfit as one thick coloured stroke
+      torso = `<line x1="-35" y1="-224" x2="35" y2="-224" stroke="${LINE}" stroke-width="9" stroke-linecap="round"/><line x1="0" y1="-252" x2="0" y2="-236" stroke="${LINE}" stroke-width="9" stroke-linecap="round"/>`
+        + (dress ? path('M-4 -196L4 -196L52 -92L-52 -92z', col) : '')
+        + `<line x1="0" y1="-236" x2="0" y2="${top === 'coat' ? -84 : -138}" stroke="${col}" stroke-width="${top === 'coat' ? 30 : 26}" stroke-linecap="round"/>`
+        + (top === 'suit' ? path('M-4 -228L4 -228L7 -176L0 -166L-7 -176z', '#c7414e') : '')
+        + (top === 'hoodie' ? path('M-15 -240C-11 -222 11 -222 15 -240z', shade(col, 0.75)) : '')
+        + (top === 'apron' ? rect(-15, -224, 30, 96, '#f4f4f0', 10) : '')
+        + (top === 'uniform' ? rect(-14, -204, 28, 6, '#f2c14e') : '');
+    }
     const acc = (L.acc || '').split(',');
     const glasses = acc.includes('glasses') ? `<g fill="none" stroke="${DARK}" stroke-width="3.4">${circ(-14, -290, 13, 'none')}${circ(14, -290, 13, 'none')}<path d="M-1 -290h2"/></g>` : '';
     const beard = acc.includes('beard') ? path('M-34 -280C-34 -246 -16 -238 0 -238C16 -238 34 -246 34 -280C26 -262 14 -256 0 -256C-14 -256 -26 -262 -34 -280z', hc) : '';
     const hat = acc.includes('hat') ? rect(-48, -322, 96, 14, '#7a5233', 6) + rect(-30, -366, 60, 48, '#8a6040', 10) : '';
     const mouthC = `stroke="${DARK}" stroke-width="3.4" stroke-linecap="round" fill="none"`;
-    const head = `<g ${p('head')}>${hh.back}${ell(0, -286, 38, 39, sk)}${circ(-38, -284, 8, sk)}${circ(38, -284, 8, sk)}${ell(0, -272, 4, 3, sh)}
-      <g ${p('eyeL')}>${ell(-14, -290, 8.5, 10.5, '#fff')}<circle ${p('pupL')} cx="-14" cy="-290" r="4.8" fill="${DARK}"/></g>
-      <g ${p('eyeR')}>${ell(14, -290, 8.5, 10.5, '#fff')}<circle ${p('pupR')} cx="14" cy="-290" r="4.8" fill="${DARK}"/></g>
+    const face = stick ? `<ellipse cx="0" cy="-286" rx="37" ry="38" fill="${sk}" stroke="${LINE}" stroke-width="6"/>`
+      : ell(0, -286, 38, 39, sk) + circ(-38, -284, 8, sk) + circ(38, -284, 8, sk) + ell(0, -272, 4, 3, sh);
+    const head = `<g ${p('head')}>${hh.back}${face}
+      <g ${p('eyeL')}>${ell(-14, -290, 8.5, 10.5, '#fff', eyeEdge)}<circle ${p('pupL')} cx="-14" cy="-290" r="4.8" fill="${DARK}"/></g>
+      <g ${p('eyeR')}>${ell(14, -290, 8.5, 10.5, '#fff', eyeEdge)}<circle ${p('pupR')} cx="14" cy="-290" r="4.8" fill="${DARK}"/></g>
       <line ${p('browL')} x1="-23" y1="-308" x2="-6" y2="-308" stroke="${shade(hc, 0.8)}" stroke-width="4.6" stroke-linecap="round"/>
       <line ${p('browR')} x1="6" y1="-308" x2="23" y2="-308" stroke="${shade(hc, 0.8)}" stroke-width="4.6" stroke-linecap="round"/>
       <g ${p('mouth')} transform="translate(0 -263)">
