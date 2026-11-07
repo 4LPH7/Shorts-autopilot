@@ -34,3 +34,7 @@ longform/films/
 longform/shorts/
 longform/node_modules/
 longform/_*
+
+# generated code graph and an old nested copy of the project
+graphify-out/
+/shorts-autopilot/
