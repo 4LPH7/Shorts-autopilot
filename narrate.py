@@ -2,10 +2,11 @@
 
     python narrate.py job.json      # writes voice.wav, words.json, sentences.json, qa.json into the job's out_dir
 
-Runs in the isolated audio environment (.venv-audio): Edge neural voices (free) or Kokoro (local, offline) speak the
-script sentence by sentence, so the pauses are chosen here and not by the voice, one bad sentence can be redone alone,
-and every word gets a real start and end time (Edge reports them; Whisper measures them for Kokoro). Whisper also
-listens to the result and compares it with the script, so a garbled sentence is caught.
+Runs in the isolated audio environment (.venv-audio): Edge neural voices (free), Kokoro (local, offline) or a premium
+voice (Gemini, ElevenLabs, MiniMax, through genmedia.py) speak the script sentence by sentence, so the pauses are
+chosen here and not by the voice, one bad sentence can be redone alone, and every word gets a real start and end time
+(Edge and ElevenLabs report them; Whisper measures them for the others). Whisper also listens to the result and
+compares it with the script, so a garbled sentence (or a voice that read its own style note aloud) is caught and redone.
 
 The pure helpers at the top need only the standard library, so the main engine's self-test can import them."""
 
@@ -19,6 +20,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 SR = 48000                                   # every sentence is brought to 48 kHz mono before it is joined
+API_ENGINES = ("gemini", "elevenlabs", "minimax")   # premium voices behind genmedia.py (keys from env or MPT's config)
+RETRY_ENGINES = ("edge",) + API_ENGINES              # engines whose garbled sentence is worth asking for once more
 PAUSE = {".": 0.30, "!": 0.26, "?": 0.40, "…": 0.45, "p": 0.55}     # silence after a sentence, by its ending
 HOOK_PAUSE = 0.42                            # the first sentence is the hook: give it room to land
 NUMBER_WORDS = set("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
@@ -113,10 +116,15 @@ def map_words(script_words, heard):
 
 def spoken_match(script, heard_text):
     """0..1: how much of the script sentence Whisper heard. Numbers may be heard as words, so number words and
-    digits are ignored on both sides."""
+    digits are ignored on both sides, and contractions are expanded on both (a voice may say "they are" for "they're")."""
     def toks(t):
         out = []
-        for w in re.findall(r"[A-Za-z0-9']+", t.lower().replace("%", " percent ").replace("$", " dollars ")):
+        t = t.lower().replace("’", "'").replace("%", " percent ").replace("$", " dollars ")
+        t = re.sub(r"\bwon't\b", "will not", re.sub(r"\bcan't\b", "can not", t))
+        t = re.sub(r"n't\b", " not", t)
+        t = re.sub(r"'re\b", " are", re.sub(r"'ll\b", " will", re.sub(r"'ve\b", " have", re.sub(r"'m\b", " am", t))))
+        t = re.sub(r"\b(it|that|what|there|here|he|she|who|where|how)'s\b", r"\1 is", t)
+        for w in re.findall(r"[A-Za-z0-9']+", t):
             if w not in NUMBER_WORDS and not any(c.isdigit() for c in w):
                 out.append(w.replace("'", ""))
         return out
@@ -128,10 +136,12 @@ def spoken_match(script, heard_text):
 
 # ---- Audio: synthesis, decoding, trimming (needs the audio environment) ------------------------
 
-def to_pcm(src, ffmpeg, sr=SR):
-    """A sound file as float32 mono samples at `sr` (ffmpeg does the decoding and resampling)."""
+def to_pcm(src, ffmpeg, sr=SR, tempo=1.0):
+    """A sound file as float32 mono samples at `sr` (ffmpeg does the decoding and resampling). `tempo` speeds the
+    speech up or down without changing its pitch, for voices that have no speed setting of their own."""
     import numpy as np
-    r = subprocess.run([ffmpeg, "-v", "error", "-i", str(src), "-f", "f32le", "-ac", "1", "-ar", str(sr), "-"],
+    speed = ["-af", f"atempo={max(0.5, min(2.0, tempo)):.3f}"] if abs(tempo - 1.0) > 0.01 else []
+    r = subprocess.run([ffmpeg, "-v", "error", "-i", str(src)] + speed + ["-f", "f32le", "-ac", "1", "-ar", str(sr), "-"],
                        capture_output=True, stdin=subprocess.DEVNULL)
     if r.returncode or not r.stdout:
         raise RuntimeError(f"couldn't decode {src}: {r.stderr[-200:].decode(errors='replace')}")
@@ -173,7 +183,7 @@ def level_match(x, target_db=-21.0, max_db=4.0):
     return y.astype("float32")
 
 
-async def edge_sentence(text, voice, rate, retries=3):
+async def edge_sentence(text, voice, rate, retries=3, pitch="+0Hz"):
     """One sentence from an Edge neural voice: (mp3 bytes, [(word, start, end)]) with real word timing."""
     import edge_tts
     pct = f"{round((rate - 1) * 100):+d}%"
@@ -182,7 +192,7 @@ async def edge_sentence(text, voice, rate, retries=3):
         audio, words = bytearray(), []
         try:
             async def pull():
-                comm = edge_tts.Communicate(text, voice, rate=pct, boundary="WordBoundary")
+                comm = edge_tts.Communicate(text, voice, rate=pct, pitch=pitch, boundary="WordBoundary")
                 async for ch in comm.stream():
                     if ch["type"] == "audio":
                         audio.extend(ch["data"])
@@ -239,13 +249,110 @@ def whisper_listen(pcm48, models, name="small.en"):
     return words, " ".join(text).strip()
 
 
+def api_sentence(i, text, job, tmp, attempt=0):
+    """One passage from a premium voice: (sound file, [(word, start, end)] or None). Gemini takes the delivery note
+    (job['style']) in words and has no speed setting (to_pcm's tempo handles the rate); ElevenLabs returns word times.
+    i is a sentence index, or "all" for the whole script in one request."""
+    import genmedia
+    engine, voice, rate = job["engine"], job["voice"], float(job.get("rate", 1.0))
+    src = Path(tmp) / f"s{i}{'' if not attempt else f'-{attempt}'}"
+    if engine == "gemini":
+        style = job.get("style", "")
+        if i == "all" and style:
+            style += " Pause briefly after every sentence, a little longer between paragraphs."
+        return genmedia.gemini_tts(text, src.with_suffix(".wav"), voice, style, job.get("model") or genmedia.GEMINI_TTS), None
+    if engine == "elevenlabs":
+        return genmedia.elevenlabs_tts(text, src.with_suffix(".mp3"), voice, job.get("model") or genmedia.ELEVEN_MODEL, rate)
+    if engine == "minimax":
+        return genmedia.minimax_tts(text, src.with_suffix(".mp3"), voice, job.get("model") or genmedia.MINIMAX_MODEL, rate), None
+    raise ValueError(f"unknown voice engine: {engine}")
+
+
+API_SYNTH = api_sentence                                  # the self-test swaps this for a stand-in that costs nothing
+
+
+def api_all(sentences, job):
+    """Every sentence fetched in parallel (a few at a time, the services rate-limit): [(file, words) | exception]."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(item):
+        i, (text, _) = item
+        try:
+            return API_SYNTH(i, text, job, Path(job["out_dir"]) / "parts")
+        except Exception as err:                             # noqa: BLE001  (raised again where the sentence is used)
+            return err
+    with ThreadPoolExecutor(max_workers=max(1, int(job.get("parallel", 3)))) as pool:
+        return list(pool.map(one, enumerate(sentences)))
+
+
+def narrate_whole(job, sentences, out, tmp, t0):
+    """The whole script in ONE request (premium voices): the voice chooses its own pauses, Whisper measures every word,
+    and the script's words are mapped onto what was heard, sentence by sentence. One request a video keeps Gemini's
+    free tier (10 requests a day per model) usable; a poor match is asked for once more."""
+    import numpy as np
+    import soundfile as sf
+    text = ""
+    for s, kind in sentences:
+        text += s + ("\n\n" if kind == "p" else " ")
+    text = text.strip()
+    ffmpeg, rate = job["ffmpeg"], float(job.get("rate", 1.0))
+    tempo = rate if job["engine"] == "gemini" else 1.0
+    best, attempts = None, 0
+    for attempt in range(2):
+        attempts += 1
+        src, words = API_SYNTH("all", text, job, tmp, attempt)
+        pcm, cut = trim(to_pcm(src, ffmpeg, tempo=tempo))
+        native = [(w, max(0.0, s / tempo - cut), max(0.0, e / tempo - cut)) for w, s, e in words] if words else None
+        listened, heard_text = whisper_listen(pcm, job["models_dir"])
+        heard = listened if native is None else native
+        match = spoken_match(text, heard_text)
+        if best is None or match > best[4]:
+            best = (pcm, heard, heard_text, native is not None, match)
+        if match >= 0.85 or job["engine"] not in RETRY_ENGINES:
+            break
+    pcm, heard, heard_text, native_any, overall = best
+    toks_per = [script_tokens(s) for s, _ in sentences]
+    spans = map_words([t for toks in toks_per for t in toks], heard)
+    words_out, sents_out, pos = [], [], 0
+    for i, ((s, kind), toks) in enumerate(zip(sentences, toks_per)):
+        mine = spans[pos:pos + len(toks)]
+        pos += len(toks)
+        for tok, span in zip(toks, mine):
+            if span is not None:
+                words_out.append({"text": tok, "start": round(span[0], 3), "end": round(span[1], 3), "sentence": i})
+        starts, ends = [sp[0] for sp in mine if sp], [sp[1] for sp in mine if sp]
+        a = min(starts) if starts else (sents_out[-1]["end"] if sents_out else 0.0)
+        b = max(ends) if ends else a
+        heard_here = " ".join(w for w, ws, we in heard if ws >= a - 0.08 and we <= b + 0.08)
+        sents_out.append({"text": s, "kind": kind, "start": round(a, 3), "end": round(b, 3),
+                          "match": spoken_match(s, heard_here) if heard_here else round(overall, 3), "heard": heard_here})
+    sf.write(str(out / "voice.wav"), pcm, SR, subtype="PCM_16")
+    (out / "words.json").write_text(json.dumps(words_out, ensure_ascii=False, indent=1), encoding="utf-8")
+    (out / "sentences.json").write_text(json.dumps(sents_out, ensure_ascii=False, indent=1), encoding="utf-8")
+    matches = [x["match"] for x in sents_out]
+    qa = {"engine": job["engine"], "voice": job["voice"], "rate": rate, "seconds": round(len(pcm) / SR, 2), "mode": "whole",
+          "sentences": len(sents_out), "words": len(words_out), "mean_match": round(sum(matches) / len(matches), 3),
+          "worst_match": min(matches), "overall_match": round(overall, 3), "doubtful": [i for i, m in enumerate(matches) if m < 0.8],
+          "retried": [0] if attempts > 1 else [], "native_timing": native_any, "work_seconds": round(time.time() - t0, 1)}
+    (out / "qa.json").write_text(json.dumps(qa, indent=1), encoding="utf-8")
+    return qa
+
+
 # ---- The job -------------------------------------------------------------------------------
 
-def synth_sentence(i, text, job, tmp, raw=None):
+def synth_sentence(i, text, job, tmp, raw=None, attempt=0):
     """Speak one sentence. Returns (samples, native_words or None): trimmed, level-matched, word times shifted to
-    the trimmed start. `raw` is an already-fetched Edge result (the parallel first pass)."""
+    the trimmed start. `raw` is an already-fetched result from the parallel first pass (Edge or a premium voice)."""
     import soundfile as sf
     ffmpeg, voice, rate = job["ffmpeg"], job["voice"], float(job.get("rate", 1.0))
+    if job["engine"] in API_ENGINES:
+        if isinstance(raw, Exception):
+            raise raw
+        src, words = raw if raw is not None else API_SYNTH(i, text, job, tmp, attempt)
+        tempo = rate if job["engine"] == "gemini" else 1.0          # the others take the rate themselves
+        pcm, cut = trim(to_pcm(src, ffmpeg, tempo=tempo))
+        native = [(w, max(0.0, s / tempo - cut), max(0.0, e / tempo - cut)) for w, s, e in words] if words else None
+        return level_match(pcm), native
     if job["engine"] == "edge":
         mp3, words = raw if raw is not None else asyncio.run(edge_sentence(text, voice, rate))
         src = Path(tmp) / f"s{i}.mp3"
@@ -274,16 +381,21 @@ def narrate(job):
     sentences = split_sentences(job["script"])
     if not sentences:
         raise ValueError("the script has no sentences to speak")
+    if job["engine"] in API_ENGINES and job.get("whole", True):
+        return narrate_whole(job, sentences, out, tmp, t0)
     raw = None
     if job["engine"] == "edge":                              # Edge answers are slow and independent: ask in parallel
         raw = asyncio.run(edge_all(sentences, job["voice"], float(job.get("rate", 1.0))))
+    elif job["engine"] in API_ENGINES:
+        raw = api_all(sentences, job)
     check = bool(job.get("check", True))
     scale = float(job.get("pause_scale", 1.0))
-    pieces, words_out, sents_out, retried, t = [], [], [], [], 0.0
+    pieces, words_out, sents_out, retried, t, native_any = [], [], [], [], 0.0, False
     for i, (text, kind) in enumerate(sentences):
         best = None
         for attempt in range(2):                             # a garbled sentence is spoken once more, then the better one is kept
-            pcm, native = synth_sentence(i, text, job, tmp, raw[i] if raw and attempt == 0 else None)
+            pcm, native = synth_sentence(i, text, job, tmp, raw[i] if raw and attempt == 0 else None, attempt)
+            native_any = native_any or native is not None
             heard, heard_text, match = native, "", 1.0
             if native is None or check:
                 listened, heard_text = whisper_listen(pcm, job["models_dir"])
@@ -291,7 +403,7 @@ def narrate(job):
                 heard = listened if native is None else native
             if best is None or match > best[3]:
                 best = (pcm, heard, heard_text, match)
-            if match >= 0.8 or job["engine"] != "edge":
+            if match >= 0.8 or job["engine"] not in RETRY_ENGINES:
                 break
             retried.append(i)
         pcm, heard, heard_text, match = best
@@ -313,7 +425,7 @@ def narrate(job):
     qa = {"engine": job["engine"], "voice": job["voice"], "rate": job.get("rate", 1.0), "seconds": round(len(audio) / SR, 2),
           "sentences": len(sents_out), "words": len(words_out), "mean_match": round(sum(matches) / len(matches), 3),
           "worst_match": min(matches), "doubtful": [i for i, m in enumerate(matches) if m < 0.8], "retried": retried,
-          "native_timing": job["engine"] == "edge", "work_seconds": round(time.time() - t0, 1)}
+          "native_timing": native_any, "work_seconds": round(time.time() - t0, 1)}
     (out / "qa.json").write_text(json.dumps(qa, indent=1), encoding="utf-8")
     return qa
 

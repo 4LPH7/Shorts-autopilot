@@ -13,7 +13,7 @@
 
   const PIVOT = { // pivots in puppet space
     legL: [-15, -130], legR: [15, -130], torso: [0, -130], armL: [-35, -224], armR: [35, -224],
-    foreL: [-35, -170], foreR: [35, -170], head: [0, -248], eyeL: [-14, -290], eyeR: [14, -290], body: [0, 0],
+    foreL: [-35, -170], foreR: [35, -170], head: [0, -248], nod: [0, -248], eyeL: [-14, -290], eyeR: [14, -290], body: [0, 0],
   };
 
   function hair(style, c, id) {
@@ -76,7 +76,7 @@
     const mouthC = `stroke="${DARK}" stroke-width="3.4" stroke-linecap="round" fill="none"`;
     const face = stick ? `<ellipse cx="0" cy="-286" rx="37" ry="38" fill="${sk}" stroke="${LINE}" stroke-width="6"/>`
       : ell(0, -286, 38, 39, sk) + circ(-38, -284, 8, sk) + circ(38, -284, 8, sk) + ell(0, -272, 4, 3, sh);
-    const head = `<g ${p('head')}>${hh.back}${face}
+    const head = `<g ${p('head')}><g ${p('nod')}>${hh.back}${face}
       <g ${p('eyeL')}>${ell(-14, -290, 8.5, 10.5, '#fff', eyeEdge)}<circle ${p('pupL')} cx="-14" cy="-290" r="4.8" fill="${DARK}"/></g>
       <g ${p('eyeR')}>${ell(14, -290, 8.5, 10.5, '#fff', eyeEdge)}<circle ${p('pupR')} cx="14" cy="-290" r="4.8" fill="${DARK}"/></g>
       <line ${p('browL')} x1="-23" y1="-308" x2="-6" y2="-308" stroke="${shade(hc, 0.8)}" stroke-width="4.6" stroke-linecap="round"/>
@@ -86,10 +86,17 @@
         <ellipse ${p('m1')} cx="0" cy="1" rx="9" ry="5" fill="#5a1f1f" opacity="0"/>
         <g ${p('m2')} opacity="0"><ellipse cx="0" cy="3" rx="12" ry="11" fill="#5a1f1f"/><ellipse cx="0" cy="9" rx="7" ry="4" fill="#e0667a"/></g>
         <circle ${p('m3')} cx="0" cy="3" r="7" fill="#5a1f1f" opacity="0"/>
-      </g>${beard}${glasses}${hh.front}${hat}</g>`;
-    const body = `<g ${p('body')}>${legs}<g ${p('torso')}>${torso}${arms}${head}</g></g>`;
+        <g ${p('mB')} opacity="0"><ellipse cx="0" cy="1.5" rx="11" ry="4.6" fill="#5a1f1f"/><rect x="-8" y="-2.4" width="16" height="3.2" rx="1.2" fill="#fff"/></g>
+        <g ${p('mC')} opacity="0"><ellipse cx="0" cy="2.5" rx="11.5" ry="7.5" fill="#5a1f1f"/><rect x="-7.5" y="-4.4" width="15" height="3.2" rx="1.2" fill="#fff"/></g>
+        <g ${p('mF')} opacity="0"><ellipse cx="0" cy="2" rx="6" ry="6.5" fill="#b4545e"/><ellipse cx="0" cy="2" rx="3.4" ry="4" fill="#5a1f1f"/></g>
+        <g ${p('mG')} opacity="0"><path d="M-10 2Q0 6 10 2" ${mouthC}/><rect x="-6.5" y="-2.2" width="13" height="4" rx="1.4" fill="#fff"/></g>
+        <g ${p('mH')} opacity="0"><ellipse cx="0" cy="2.5" rx="10.5" ry="7.5" fill="#5a1f1f"/><ellipse cx="0" cy="-1" rx="5.5" ry="3.6" fill="#e0667a"/></g>
+      </g>${beard}${glasses}${hh.front}${hat}</g></g>`;
+    // a blanket for sitting up in bed: over the lap and draped down the mattress side, under the arms (hands rest on it)
+    const blanket = `<path ${p('blanket')} d="M-56 -60L-56 -150Q-44 -164 0 -162L160 -154Q215 -182 262 -152Q310 -146 340 -128L346 -60z" fill="#8fc1e3" opacity="0"/>`;
+    const body = `<g ${p('body')}>${legs}<g ${p('torso')}>${torso}${blanket}${arms}${head}</g></g>`;
     const chair = `<g ${p('chair')} opacity="0">${rect(-52, -72, 104, 14, '#8a5a3b', 5)}${rect(-46, -58, 12, 58, '#6b4429')}${rect(34, -58, 12, 58, '#6b4429')}${rect(-46, -190, 12, 120, '#6b4429', 5)}</g>`;
-    return `<g ${p('root')}>${ell(0, 0, 64, 11, 'rgba(0,0,0,.2)')}${chair}${body}</g>`;
+    return `<g ${p('root')}>${ell(0, 0, 64, 11, 'rgba(0,0,0,.2)', p('shadow'))}${chair}${body}</g>`;
   }
 
   g.Rig = {
@@ -97,7 +104,8 @@
     /* Parts of puppet `id` as elements, with their pivots applied. Call once, after the markup is in the DOM. */
     parts(id) {
       const out = {};
-      for (const n of ['root', 'chair', 'body', 'legL', 'legR', 'torso', 'armL', 'armR', 'foreL', 'foreR', 'head', 'eyeL', 'eyeR', 'pupL', 'pupR', 'browL', 'browR', 'mouth', 'mc0', 'mc1', 'mc2', 'm1', 'm2', 'm3']) out[n] = document.getElementById(`${id}-${n}`);
+      for (const n of ['root', 'shadow', 'chair', 'body', 'legL', 'legR', 'torso', 'blanket', 'armL', 'armR', 'foreL', 'foreR', 'head', 'nod', 'eyeL', 'eyeR', 'pupL', 'pupR',
+        'browL', 'browR', 'mouth', 'mc0', 'mc1', 'mc2', 'm1', 'm2', 'm3', 'mB', 'mC', 'mF', 'mG', 'mH']) out[n] = document.getElementById(`${id}-${n}`);
       for (const [n, [x, y]] of Object.entries(PIVOT)) if (out[n]) g.gsap.set(out[n], { svgOrigin: `${x} ${y}` });
       g.gsap.set(out.root, { svgOrigin: '0 0' });
       g.gsap.set([out.pupL, out.pupR], { svgOrigin: '0 -290' });

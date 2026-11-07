@@ -1,6 +1,7 @@
 #root { position: absolute; inset: 0; overflow: hidden; background: #0f1530; font-family: 'Nunito', sans-serif; }
 #root .cam { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
 #root .layer { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+#root .bg { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; object-fit: cover; }
 #root .layer svg { position: absolute; left: 0; top: 0; }
 #root .cards { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 10; }
 #root .capbox { position: absolute; left: 0; bottom: 110px; width: 1920px; height: 0; z-index: 20; }

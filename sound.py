@@ -32,6 +32,15 @@ VOICE_CHAIN = {
     "kokoro": ("highpass=f=75,equalizer=f=160:t=q:w=1.0:g=1.2,equalizer=f=3000:t=q:w=1.2:g=1.5,"
                "equalizer=f=9000:t=h:w=1:g=2.0,"
                "acompressor=threshold=0.09:ratio=3:attack=6:release=110:makeup=2.5,alimiter=limit=0.93"),
+    # Gemini's voices come at 24 kHz: a touch of body and air, and the same gentle compressor
+    "gemini": ("highpass=f=70,equalizer=f=130:t=q:w=1.0:g=1.3,equalizer=f=2600:t=q:w=1.3:g=1.2,"
+               "equalizer=f=9500:t=h:w=1:g=1.5,"
+               "acompressor=threshold=0.09:ratio=2.6:attack=6:release=120:makeup=2.0,alimiter=limit=0.93"),
+    # Studio-grade voices need almost nothing: a high-pass, a hint of presence, the compressor for consistency
+    "elevenlabs": ("highpass=f=70,equalizer=f=3000:t=q:w=1.4:g=0.8,"
+                   "acompressor=threshold=0.1:ratio=2.4:attack=6:release=120:makeup=1.8,alimiter=limit=0.93"),
+    "minimax": ("highpass=f=70,equalizer=f=3000:t=q:w=1.4:g=0.8,"
+                "acompressor=threshold=0.1:ratio=2.4:attack=6:release=120:makeup=1.8,alimiter=limit=0.93"),
 }
 
 

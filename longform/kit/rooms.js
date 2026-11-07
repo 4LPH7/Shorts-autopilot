@@ -1,4 +1,4 @@
-/* Flat-vector rooms for the long-video scenes. Pure functions: Rooms.make(kind, tone, pre) -> {svg, anchors}.
+/* Flat-vector rooms for the long-video scenes. Pure functions: Rooms.make(kind, tone, pre) -> {svg}.
    Canvas 1920x1080, wall to y=860, floor below. `pre` makes every gradient id unique across the assembled page. */
 (function (g) {
   const FLOOR = 860;
@@ -117,8 +117,7 @@
       return rect(0, 0, 1920, 1080, '#0f1530') + circ(960, 520, 640, `url(#${pre}-glow)`, 'opacity=".12"') + dots;
     },
   };
-  // Where a lying character goes (the bed's pillow) and which kinds have one.
-  const ANCHORS = { hospital: { lie: { x: 1520, y: 628 } }, bedroom: { lie: { x: 1700, y: 628 } } };
+  // Where someone sits up in a bed drawn here is lf_plan.BEDS (the planner keeps everyone else clear of it).
 
   g.Rooms = {
     kinds: Object.keys(ROOMS),
@@ -126,7 +125,7 @@
       const k = ROOMS[kind] ? kind : 'living';
       const t = SKY[tone] ? tone : 'day';
       const body = ROOMS[k](pre, t) + (TINT[t] && k !== 'void' && k !== 'stage' ? rect(0, 0, 1920, 1080, TINT[t]) : '') + rect(0, 0, 1920, 1080, `url(#${pre}-vig)`);
-      return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">${defs(pre, t)}${body}</svg>`, anchors: ANCHORS[k] || {} };
+      return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">${defs(pre, t)}${body}</svg>` };
     },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

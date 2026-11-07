@@ -24,8 +24,8 @@ echo Installing Python 3.11 and MoneyPrinterTurbo's packages (a few minutes the 
 pushd "%MPT_DIR%"
 uv python install 3.11 || (popd & pause & exit /b 1)
 uv sync --frozen || (popd & pause & exit /b 1)
-rem The app's interface (uv sync removes extra packages, so re-add it every time)
-uv pip install --python .venv\Scripts\python.exe customtkinter==5.2.2 || (popd & pause & exit /b 1)
+rem The app's interface and the Claude API client (uv sync removes extra packages, so re-add them every time)
+uv pip install --python .venv\Scripts\python.exe customtkinter==5.2.2 "anthropic>=2.4,<3" || (popd & pause & exit /b 1)
 
 popd
 

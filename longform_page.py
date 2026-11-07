@@ -1,15 +1,14 @@
 """The "Long video" page of the app, as a mixin for App in autopilot_gui.pyw: start a film, watch its progress, watch and
-approve or reject it, bring in clips made in Google Vids, copy the upload text. All the work happens in longform.py (run
-through run_daily.bat so it logs like everything else); this file is only the interface.
+approve or reject it, copy the upload text. All the work happens in longform.py (run through run_daily.bat so it logs
+like everything else); this file is only the interface.
 autopilot_gui.pyw sets longform_page.G to its own module, which carries the look (label, button, card, C, ...)."""
 
 import json
 import os
-import shutil
 import subprocess
 import webbrowser
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import messagebox
 
 import customtkinter as ctk
 
@@ -17,7 +16,6 @@ import lf_screenplay as sc
 import longform as lf
 
 G = None
-VIDS_URL = "https://docs.google.com/videos/"
 STYLES = {"Cartoon people": "cartoon", "Stick figures": "stick"}          # how the characters are drawn (lf_plan.STYLES)
 IDEAS = ["What if money disappeared for one week?", "What if every lie came with a visible sign?",
          "What if you never needed to sleep again?", "What if everyone could see each other's net worth?",
@@ -120,8 +118,6 @@ class LongVideoPage:
             self.lf_storyboard(f)
         if m.get("checks"):
             self.lf_checks(m["checks"])
-        if f.screenplay.exists():
-            self.lf_vids(f)
         if (f.dir / "manifest.json").exists():
             self.lf_record(f)
         if m["stage"] in ("approved", "posted"):
@@ -205,7 +201,7 @@ class LongVideoPage:
         box.pack(fill="x", pady=(0, 12))
         rows = (("Script", man["script"]), ("Voices", ", ".join(f"{k}: {v}" for k, v in man["voices"].items())), ("Picture", man["picture"]),
                 ("Sound effects", man["sound_effects"]), ("Music", "; ".join(f"{m['file']} ({m['source']})" for m in man["music"]) or "none"),
-                ("Generated clips", ", ".join(man["generated_clips"]) or "none"), ("Before you upload", man["disclosure"]))
+                ("Before you upload", man["disclosure"]))
         for name, text in rows:
             G.label(inner, f"{name}: {text}", 12, G.C["muted"], wrap=700).pack(anchor="w", pady=1)
 
@@ -214,26 +210,6 @@ class LongVideoPage:
         box.pack(fill="x", pady=(0, 12))
         for c in checks["checks"]:
             G.label(inner, ("OK   " if c["ok"] else "LOOK ") + f"{c['name']}: {c['detail']}", 13, G.TONES["ok" if c["ok"] else "warn"][1]).pack(anchor="w")
-
-    def lf_vids(self, f):
-        sp = sc.load(f.screenplay)
-        shots = [s for s in sp["scenes"] if s.get("vids")]
-        if not shots:
-            return
-        box, inner, _ = self.section(self.lf_detail, "Google Vids shots", "optional cutaways")
-        box.pack(fill="x", pady=(0, 12))
-        G.label(inner, "Vids can't be driven by the app, so this part is by hand: open Vids, choose Blank, then Veo, paste the prompt, "
-                       "generate (8 seconds), then File > Download > MP4 and import it here. Without a clip the scene simply stays animated.",
-                12, G.C["muted"], wrap=700).pack(anchor="w", pady=(0, 8))
-        for s in shots:
-            have = (f.dir / "vids" / f"{s['id']}.mp4").exists()
-            G.label(inner, f"{s['title']}  ({'imported' if have else 'not yet'})", 13, weight="bold").pack(anchor="w", pady=(6, 0))
-            G.label(inner, s["vids"], 12, G.C["muted"], wrap=700).pack(anchor="w")
-            r = ctk.CTkFrame(inner, fg_color="transparent")
-            r.pack(anchor="w", pady=(4, 0))
-            G.button(r, "Copy prompt", lambda t=s["vids"]: self.lf_copy(t), "ghost").pack(side="left", padx=(0, 6))
-            G.button(r, "Open Google Vids", lambda: webbrowser.open(VIDS_URL), "ghost").pack(side="left", padx=(0, 6))
-            G.button(r, "Import clip...", lambda sid=s["id"]: self.lf_import(f, sid), "secondary").pack(side="left")
 
     def lf_post(self, f):
         pack_file = f.dir / "upload_pack.json"
@@ -278,19 +254,6 @@ class LongVideoPage:
             top.destroy()
             self.lf_set(lf.reject, self.lf_film, reason or "no reason given")
         G.button(frm, "Reject", go, "danger").pack(anchor="e")
-
-    def lf_import(self, film, scene_id):
-        path = filedialog.askopenfilename(title="Choose the clip you made in Google Vids", filetypes=[("Video", "*.mp4 *.mov *.webm"), ("All files", "*.*")])
-        if not path:
-            return
-        (film.dir / "vids").mkdir(exist_ok=True)
-        shutil.copyfile(path, film.dir / "vids" / f"{scene_id}.mp4")
-        if messagebox.askyesno("Clip imported", "Use it now? The picture is rendered again (the voices are kept)."):
-            lf.redo_from(film, "voiced")
-            self.lf_continue()
-        else:
-            self.lf_view = None
-            self.refresh_long_video()
 
     def lf_approve(self):
         """The person has read the script or looked at the storyboard: go past that stop."""

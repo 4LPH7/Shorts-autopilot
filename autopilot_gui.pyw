@@ -32,6 +32,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import daily_shorts as eng  # noqa: E402
 import clipper_page  # noqa: E402
+import genmedia  # noqa: E402
+import explainer_page  # noqa: E402
 import longform_page  # noqa: E402
 
 TASK = "MPT Daily Shorts"
@@ -46,14 +48,25 @@ UPLOAD_LABELS = {"auto": "Automatic (Upload-Post)", "manual": "Manual (I upload 
 MOTION_LABELS = {"subtle": "Subtle (recommended)", "dynamic": "Dynamic (bigger camera moves)",
                  "off": "Off (plain captions, still cuts)"}
 LOOK_LABELS = {"clean": "Clean", "cinematic": "Cinematic (soft vignette, light grain)", "warm": "Warm"}
-ENGINE_LABELS = {"edge": "Microsoft neural voices (free)", "kokoro": "Kokoro (runs on this PC)",
-                 "mpt": "MoneyPrinterTurbo (the old way)"}
+ENGINE_LABELS = {"gemini": "Gemini voices (premium, Google key)", "elevenlabs": "ElevenLabs (premium, key needed)",
+                 "minimax": "MiniMax (premium, key needed)", "edge": "Microsoft neural voices (free)",
+                 "kokoro": "Kokoro (runs on this PC)", "mpt": "MoneyPrinterTurbo (the old way)"}
 SFX_LABELS = {"subtle": "Subtle (recommended)", "full": "Full (every cut)", "off": "Off"}
 VOICE_CHOICES = {"edge": ["en-US-AndrewMultilingualNeural", "en-US-BrianMultilingualNeural", "en-US-AvaMultilingualNeural",
                           "en-US-EmmaMultilingualNeural", "en-US-GuyNeural", "en-US-ChristopherNeural", "en-US-AriaNeural",
                           "en-US-JennyNeural"],
                  "kokoro": ["af_heart", "af_bella", "af_nova", "af_sky", "am_michael", "am_fenrir", "am_puck", "am_adam",
-                            "bf_emma", "bm_george"], "mpt": []}
+                            "bf_emma", "bm_george"], "mpt": [],
+                 "gemini": [f"{v}" for v in genmedia.GEMINI_VOICES], "elevenlabs": list(genmedia.ELEVEN_VOICES),
+                 "minimax": list(genmedia.MINIMAX_VOICES)}
+VISUAL_LABELS = {"cinematic": "Cinematic (generated pictures, one style)", "stock": "Stock footage (clips)",
+                 "hybrid": "Stock footage, generated where no clip fits"}
+STYLE_LABELS = {"cinematic": "Cinematic photoreal", "noir": "Dark noir", "documentary": "Natural documentary",
+                "illustrated": "Editorial illustration"}
+PROVIDER_LABELS = {"auto": "Automatic (any key set up, free service last)", "muapi": "MuAPI", "gemini": "Gemini",
+                   "pollinations": "Pollinations (free, one picture every 45 s)"}
+LF_BG_LABELS = {"painted": "Painted backgrounds", "photo": "Photo backgrounds", "off": "Flat vector rooms"}
+MAKER_LABELS = {"footage": "Footage Shorts", "story": "Animated story Shorts", "alternate": "Alternate the two"}
 UPLOAD_STEPS = (
     ("Open YouTube and copy the title",
      "Opens YouTube's upload page, shows the video file in Explorer and copies the title. "
@@ -63,7 +76,7 @@ UPLOAD_STEPS = (
     ("I uploaded it: mark as done", "Files the video as posted and moves on to the next one."),
 )
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-PAGES = ("Dashboard", "Review", "Upload", "History", "Long video", "Music", "Clips", "Settings", "Setup", "Logs")
+PAGES = ("Dashboard", "Review", "Upload", "History", "Long video", "Explainer", "Music", "Clips", "Settings", "Setup", "Logs")
 
 # ---- Dark theme: warm near-black surfaces, one light accent, muted semantic tones ----------
 C = {
@@ -263,10 +276,10 @@ def set_text(box, text, readonly=False):
 
 # ---- App -----------------------------------------------------------------------------
 
-longform_page.G = clipper_page.G = sys.modules[__name__]           # these pages use this file's look (label, button, C, ...)
+longform_page.G = clipper_page.G = explainer_page.G = sys.modules[__name__]          # these pages use this file's look (label, button, C, ...)
 
 
-class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
+class App(longform_page.LongVideoPage, explainer_page.ExplainerPage, clipper_page.ClipperPanel):
     def __init__(self, root):
         self.root = root
         self.q = queue.Queue()
@@ -480,6 +493,7 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
         self.refresh_music()
         self.refresh_clips()
         self.refresh_long_video()
+        self.refresh_explainer()
         if self.page == "Logs":
             self.refresh_logs()
         if not lists_only:
@@ -499,6 +513,7 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
         self.dash_sub = self.header(p, "Dashboard", "", actions=[
             ("Dry run", self.dry_run, "ghost"),
             ("Render one video", lambda: self.start_run(["--render"], "Render"), "secondary"),
+            ("Animated story Short", self.story_short, "secondary"),
             ("Run now", self.run_now, "primary")])
 
         stats = ctk.CTkFrame(p, fg_color="transparent")
@@ -544,6 +559,43 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
         fr, self.runs_tree = self.table(inner, ("Time", "Mode", "Upload", "Rendered", "Problems"),
                                         (120, 60, 140, 170, 170), height=9)
         fr.pack(fill="both", expand=True)
+
+    def story_short(self):
+        """An animated story Short (story_short.py): a narrator and 1-3 cartoon characters tell one true story, or walk you
+        through a "What if...?". It lands in Review."""
+        kinds = {"True story": ("true", ["", "Victor Lustig sold the Eiffel Tower twice (1925)", "The Great Emu War of 1932",
+                                         "The London Beer Flood of 1814"]),
+                 "What if...?": ("whatif", ["", "What if you never needed to sleep again?", "What if the Moon disappeared tonight?",
+                                            "What if everyone could read minds for one day?"])}
+        top, frm = self.dialog("Animated story Short", 560)
+        kind, topic = ctk.StringVar(value="True story"), ctk.StringVar(value="")
+        krow = ctk.CTkFrame(frm, fg_color="transparent")
+        krow.pack(anchor="w", pady=(0, 8))
+        label(krow, "Kind", 12, C["muted"]).pack(side="left")
+        option(krow, kind, list(kinds), 180, command=lambda k: (picker.configure(values=kinds[k][1]), topic.set(""))).pack(side="left", padx=8)
+        label(frm, "Which story? Leave it empty and the app picks one it hasn't told yet. A true story ends on a payoff line, "
+                   "a What if... on a question to the viewer.", 13, wrap=520).pack(anchor="w")
+        picker = combo(frm, topic, kinds["True story"][1], 520)
+        picker.pack(anchor="w", pady=(6, 10))
+        row = ctk.CTkFrame(frm, fg_color="transparent")
+        row.pack(anchor="w", pady=(0, 12))
+        seconds, look = ctk.StringVar(value="30"), ctk.StringVar(value="Cartoon people")
+        label(row, "Length (seconds)", 12, C["muted"]).pack(side="left")
+        option(row, seconds, ["20", "30", "45"], 80).pack(side="left", padx=(8, 20))
+        label(row, "Look", 12, C["muted"]).pack(side="left")
+        option(row, look, list(longform_page.STYLES), 180).pack(side="left", padx=8)
+        label(frm, "Written by your Claude, voiced with Edge voices and animated with HyperFrames: a few minutes. It waits in Review "
+                   "with its claims listed for you to check. Nothing is posted until you approve it.", 12, C["faint"], wrap=520).pack(anchor="w", pady=(0, 14))
+
+        def go():
+            job = {"topic": topic.get().strip(), "seconds": int(seconds.get()), "style": longform_page.STYLES[look.get()],
+                   "story": kinds[kind.get()][0]}
+            top.destroy()
+            eng.WORK.mkdir(exist_ok=True)
+            path = eng.WORK / "story_job.json"
+            path.write_text(json.dumps(job, indent=1), encoding="utf-8")
+            self.start_run(["--story", str(path)], "Story Short")
+        button(frm, "Make it", go, "primary").pack(anchor="e")
 
     def run_now(self):
         if messagebox.askyesno("Run now", "This does exactly what a scheduled run does:\n\n"
@@ -1392,7 +1444,9 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
         self.sv = {k: tk.StringVar() for k in ("niche", "language", "voice", "monthly_uploads", "run_times", "buffer",
                                                "music_volume", "clean_after_days", "privacy", "voice_rate",
                                                "music_mode", "music_track", "quota_reset_day", "meter_used", "upload_mode",
-                                               "motion_level", "look", "accent_color", "voice_engine", "sfx_level")}
+                                               "motion_level", "look", "accent_color", "voice_engine", "sfx_level",
+                                               "visual_mode", "visual_style", "image_provider", "gen_budget_usd",
+                                               "lf_backgrounds", "voice_style", "short_maker")}
         self.master_var = tk.BooleanVar(value=True)
         scroll = self.settings_scroll = ctk.CTkScrollableFrame(p, fg_color="transparent", scrollbar_button_color=C["border"])
         scroll.pack(fill="both", expand=True)
@@ -1450,8 +1504,24 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
               "Warmth, presence and a gentle compressor, so it sounds recorded.")
         field(f, 4, "Sound effects", option(f, self.sv["sfx_level"], list(SFX_LABELS.values()), 300),
               "Whooshes into cuts and a hit on big numbers, made from scratch.")
+        field(f, 5, "Delivery", entry(f, self.sv["voice_style"], 300),
+              "How a Gemini voice reads, in plain words (low and deliberate, bright and quick...).")
         button(f, "Audition voices", lambda: self.start_run(["--audition"], "Voice audition"), "secondary",
                width=200).grid(row=10, column=1, sticky="w", pady=(10, 0))
+
+        box, inner, _ = self.section(left, "Pictures")
+        box.pack(fill="x", pady=(0, 12))
+        f = form(inner, 230)
+        field(f, 0, "Visuals", option(f, self.sv["visual_mode"], list(VISUAL_LABELS.values()), 300),
+              "Generated pictures in one consistent style (needs a MuAPI or Gemini key in Setup), stock clips, or both.")
+        field(f, 1, "Style", option(f, self.sv["visual_style"], list(STYLE_LABELS.values()), 300),
+              "The look every generated picture shares.")
+        field(f, 2, "Image provider", option(f, self.sv["image_provider"], list(PROVIDER_LABELS.values()), 300),
+              "Where pictures are made. Automatic uses the keys you have; the free service is slow and soft.")
+        field(f, 3, "Budget per video", entry(f, self.sv["gen_budget_usd"], 120),
+              "Dollars of generated media at most per video (a picture costs about a cent).")
+        field(f, 4, "Long film rooms", option(f, self.sv["lf_backgrounds"], list(LF_BG_LABELS.values()), 300),
+              "Generated backgrounds behind the characters of a long film, or the flat vector rooms.")
 
         box, inner, _ = self.section(left, "Look and motion")
         box.pack(fill="x")
@@ -1477,6 +1547,8 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
               "Type the number from Upload-Post's meter. The app uses the higher of this and its own count.")
         field(f, 7, "Upload mode", option(f, self.sv["upload_mode"], list(UPLOAD_LABELS.values()), 260),
               "Automatic switches to manual by itself when the free uploads run out.")
+        field(f, 8, "Scheduled Shorts", option(f, self.sv["short_maker"], list(MAKER_LABELS.values()), 260),
+              "What a scheduled run renders. Story Shorts need the LLM; if it fails, the run logs it and tries next time.")
 
         box, inner, _ = self.section(scroll, "Schedule")
         box.grid(row=2, column=0, columnspan=2, sticky="nsew")
@@ -1517,6 +1589,13 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
         self.sv["motion_level"].set(MOTION_LABELS[s["motion_level"]])
         self.sv["look"].set(LOOK_LABELS[s["look"]])
         self.sv["accent_color"].set(s["accent_color"])
+        self.sv["visual_mode"].set(VISUAL_LABELS[s["visual_mode"]])
+        self.sv["visual_style"].set(STYLE_LABELS[s["visual_style"]])
+        self.sv["image_provider"].set(PROVIDER_LABELS[s["image_provider"]])
+        self.sv["gen_budget_usd"].set(str(s["gen_budget_usd"]))
+        self.sv["lf_backgrounds"].set(LF_BG_LABELS[s["lf_backgrounds"]])
+        self.sv["short_maker"].set(MAKER_LABELS.get(s["short_maker"], MAKER_LABELS["footage"]))
+        self.sv["voice_style"].set(s["voice_style"])
         self.sv["meter_used"].set(str(s["meter_used"]))
         set_text(self.rules_text, s["script_rules"])
         try:
@@ -1540,6 +1619,14 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
         new["motion_level"] = {v: k for k, v in MOTION_LABELS.items()}.get(self.sv["motion_level"].get(), "subtle")
         new["look"] = {v: k for k, v in LOOK_LABELS.items()}.get(self.sv["look"].get(), "clean")
         new["accent_color"] = self.sv["accent_color"].get().strip()
+        new["visual_mode"] = {v: k for k, v in VISUAL_LABELS.items()}.get(self.sv["visual_mode"].get(), "cinematic")
+        new["visual_style"] = {v: k for k, v in STYLE_LABELS.items()}.get(self.sv["visual_style"].get(), "cinematic")
+        new["image_provider"] = {v: k for k, v in PROVIDER_LABELS.items()}.get(self.sv["image_provider"].get(), "auto")
+        new["gen_budget_usd"] = self.sv["gen_budget_usd"].get().strip()
+        new["lf_backgrounds"] = {v: k for k, v in LF_BG_LABELS.items()}.get(self.sv["lf_backgrounds"].get(), "painted")
+        new["voice_style"] = self.sv["voice_style"].get().strip()
+        new["short_maker"] = {v: k for k, v in MAKER_LABELS.items()}.get(self.sv["short_maker"].get(), "footage")
+        new["image_model"], new["voice_model"] = old["image_model"], old["voice_model"]     # settings.json only
         new["meter_used"] = self.sv["meter_used"].get().strip()
         new["meter_date"] = old["meter_date"]
         try:
@@ -1670,6 +1757,20 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
         button(f, "Save", self.save_coverr, "secondary").pack(side="left", padx=8)
         button(f, "Request a key", lambda: webbrowser.open("https://api.coverr.co/docs/"), "ghost").pack(side="left")
 
+        cell = row("genmedia", "Pictures and voices")
+        f = line(cell)
+        self.muapi_key = tk.StringVar()
+        label(f, "MuAPI key ", 12, C["muted"], width=96).pack(side="left")
+        entry(f, self.muapi_key, 220, show="*").pack(side="left")
+        button(f, "Save", self.save_muapi, "secondary").pack(side="left", padx=8)
+        button(f, "Get a key", lambda: webbrowser.open("https://muapi.ai/dashboard"), "ghost").pack(side="left")
+        f = line(cell)
+        self.gemini_key = tk.StringVar()
+        label(f, "Gemini key ", 12, C["muted"], width=96).pack(side="left")
+        entry(f, self.gemini_key, 220, show="*").pack(side="left")
+        button(f, "Save", self.save_gemini, "secondary").pack(side="left", padx=8)
+        button(f, "Get a key", lambda: webbrowser.open("https://aistudio.google.com/apikey"), "ghost").pack(side="left")
+
         cell = row("upload", "Upload-Post")
         f = line(cell)
         self.up_enabled = tk.BooleanVar()
@@ -1739,6 +1840,20 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
                      f"{'ON (unsafe)' if app_cfg.get('upload_post_auto_upload') else 'off'}, privacy "
                      f"{app_cfg.get('upload_post_youtube_privacy_status', '-')}. The profile is the user name on "
                      "Upload-Post's Users page, not your email.")
+        try:
+            genmedia._CONFIG.clear()
+            gm = genmedia.status()
+            s_now = eng.load_settings()
+            paid = [p for p in ("muapi", "gemini") if gm.get(p) == "key set"]
+            d = self.doctor.get("genmedia") or {}
+            self.set_row("genmedia", bool(paid) if s_now["visual_mode"] != "stock" else None,
+                         (f"Keys: {', '.join(paid)}." if paid else "No MuAPI or Gemini key: generated pictures use the free "
+                          "service (one every 45 s, softer). ")
+                         + f" Visuals: {VISUAL_LABELS[s_now['visual_mode']]}."
+                         + (f" Spent in 30 days: ${d.get('spent_30d', 0):.2f}." if d else "")
+                         + " MuAPI needs credits on its dashboard; Gemini pictures need billing on the key, its voices don't.")
+        except Exception as err:
+            self.set_row("genmedia", False, f"Couldn't check: {err}")
         claude = shutil.which("claude")
         self.set_row("claude", bool(claude) if provider == "claude_code" else True,
                      (claude + ". Also used to look at clips.") if claude else
@@ -1836,6 +1951,28 @@ class App(longform_page.LongVideoPage, clipper_page.ClipperPanel):
         self.coverr_key.set("")
         self.doctor.pop("footage", None)
         self.set_status("Coverr key saved. Its videos are searched along with Pixabay's.")
+        self.refresh_setup()
+
+    def save_muapi(self):
+        key = self.muapi_key.get().strip()
+        if not key or not self.confirm_config_write():
+            return
+        write_mpt_config({"muapi_api_key": key})
+        self.muapi_key.set("")
+        genmedia._CONFIG.clear()
+        self.doctor.pop("genmedia", None)
+        self.set_status("MuAPI key saved. Generated pictures use it first (about a cent a picture).")
+        self.refresh_setup()
+
+    def save_gemini(self):
+        key = self.gemini_key.get().strip()
+        if not key or not self.confirm_config_write():
+            return
+        write_mpt_config({"gemini_api_key": key})
+        self.gemini_key.set("")
+        genmedia._CONFIG.clear()
+        self.doctor.pop("genmedia", None)
+        self.set_status("Gemini key saved: Gemini voices work on the free tier; its pictures need billing on the key.")
         self.refresh_setup()
 
     def save_upload(self):

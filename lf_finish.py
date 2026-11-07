@@ -25,12 +25,17 @@ def scan(path):
             "lufs": float(loud.group(1)) if loud else None}
 
 
-def check_film(path, expected=None):
-    """{"ok": bool, "checks": [{"name", "ok", "detail"}]}: what a person would notice first."""
+def wanted(limits):
+    return "wanted 8-10 minutes" if limits is LIMITS else f"wanted {limits['min']:.0f}-{limits['max']:.0f} seconds"
+
+
+def check_film(path, expected=None, limits=LIMITS, size=(1920, 1080)):
+    """{"ok": bool, "checks": [{"name", "ok", "detail"}]}: what a person would notice first. limits/size: a Short's are
+    20-58 seconds at 1080x1920."""
     dur, w, h = footage.probe(path)
     sc = scan(path)
-    rows = [("length", LIMITS["min"] <= dur <= LIMITS["max"], f"{int(dur // 60)}:{int(dur % 60):02d} (wanted 8-10 minutes)"),
-            ("picture", (w, h) == (1920, 1080), f"{w}x{h}"),
+    rows = [("length", limits["min"] <= dur <= limits["max"], f"{int(dur // 60)}:{int(dur % 60):02d} ({wanted(limits)})"),
+            ("picture", (w, h) == tuple(size), f"{w}x{h}"),
             ("loudness", sc["lufs"] is not None and TARGET_LUFS[0] <= sc["lufs"] <= TARGET_LUFS[1], f"{sc['lufs']} LUFS (wanted about -14)"),
             ("no dead air", sc["silence"] == 0, f"{sc['silence']} silent stretch(es) over 5 s"),
             ("no black frames", sc["black"] == 0, f"{sc['black']} black stretch(es) over 1.2 s")]
@@ -40,15 +45,15 @@ def check_film(path, expected=None):
     return {"ok": all(c["ok"] for c in checks), "checks": checks, "seconds": round(dur, 1)}
 
 
-def check_plan(scenes, sp):
+def check_plan(scenes, sp, limits=LIMITS):
     """Checks on the plan, before anything is rendered: what is worth knowing before a half-hour render."""
     total = sum(s["dur"] for s in scenes)
     speakers = {b["who"] for s in sp["scenes"] for b in s["beats"]}
     silent = [c["name"] for c in sp["cast"] if c["id"] not in speakers]
-    odd = [s["id"] for s in scenes if not 6 <= s["dur"] <= 80]
+    odd = [s["id"] for s in scenes if not (3 if limits is not LIMITS else 6) <= s["dur"] <= 80]
     longest = max((len(c["text"]) for s in scenes for c in s["caps"]), default=0)
     unsure = sum(1 for s in sp["scenes"] for f in s.get("facts", []) if f["check"])
-    rows = [("length", LIMITS["min"] <= total <= LIMITS["max"], f"{stamp(total)} planned (wanted 8-10 minutes)"),
+    rows = [("length", limits["min"] <= total <= limits["max"], f"{stamp(total)} planned ({wanted(limits)})"),
             ("every character speaks", not silent, ("silent: " + ", ".join(silent)) if silent else f"all {len(sp['cast'])} characters speak"),
             ("scene lengths", not odd, ("odd length in " + ", ".join(odd)) if odd else "every scene runs 6 to 80 seconds"),
             ("captions fit", longest <= 100, f"the longest caption has {longest} characters"),
@@ -57,24 +62,32 @@ def check_plan(scenes, sp):
     return {"ok": all(c["ok"] for c in checks), "checks": checks, "seconds": round(total, 1)}
 
 
+def voice_name(voice_type, engine="edge"):
+    """The voice a character type was spoken with: the premium engine's voice when the film used one, else Edge's."""
+    if engine in lf_voice.PREMIUM_MAP:
+        return f"{lf_voice.PREMIUM_MAP[engine].get(voice_type, ('?', 0))[0]} ({engine})"
+    return lf_voice.VOICE_MAP[voice_type][0]
+
+
 def manifest(sp, scenes, music, meta):
     """What went into a film, for the review page and for later questions about rights: voices, music with its licence
-    note, generated clips, the claims the writer listed, and what YouTube's disclosure question is about."""
+    note, the claims the writer listed, and what YouTube's disclosure question is about."""
     voice_of = {"narrator": "narrator-" + sp["narrator"]["voice"], **{c["id"]: c["voice"] for c in sp["cast"]}}
     label = {"narrator": "Narrator", **{c["id"]: c["name"] for c in sp["cast"]}}
     return {"title": sp["title"], "made": datetime.now().isoformat(timespec="seconds"), "seconds": meta.get("seconds"),
-            "look": "stick figures" if meta.get("style") == "stick" else "cartoon people",
+            "look": {"stick": "stick figures", "explainer": "flat vector drawings made by the LLM, animated in code"}.get(meta.get("style"), "cartoon people"),
             "script": "written by the LLM set in MoneyPrinterTurbo (Claude by default); a person approves it",
-            "voices": {label[k]: lf_voice.VOICE_MAP[v][0] for k, v in voice_of.items()},
+            "voices": {label[k]: voice_name(v, meta.get("voice_engine", "edge")) for k, v in voice_of.items()},
             "picture": "drawn in code and rendered with HyperFrames" + (f" in {int(meta['render_seconds'] // 60)} min" if meta.get("render_seconds") else "")
-                       + "; no stock footage, no real people",
+                       + "; no stock footage, no real people"
+                       + ("; generated background pictures behind the cast in " + ", ".join(s["id"] for s in scenes if s.get("bg"))
+                          if any(s.get("bg") for s in scenes) else ""),
             "sound_effects": "synthesised from noise and sine waves; nothing downloaded",
             "music": [{"file": n, "source": s} for n, s in music],
-            "generated_clips": [s["id"] for s in scenes if s.get("clips")],
             "claims": [{"scene": sid, "claim": c, "check": chk} for sid, _, c, chk in
                        [(s["id"], s["title"], f["claim"], f["check"]) for s in sp["scenes"] for f in s.get("facts", [])]],
             "disclosure": "The characters are cartoons and the voices are AI. YouTube's altered-or-synthetic-content question is about "
-                          "realistic depictions of real people, places or events: none of this film is, but a real-looking Veo clip would be."}
+                          "realistic depictions of real people, places or events, and none of this film is."}
 
 
 def chapters(scenes_plan, screenplay):

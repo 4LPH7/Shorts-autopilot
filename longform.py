@@ -3,7 +3,6 @@
     film.json         where it is (stage, progress, message, checks...), written atomically so the app can poll it
     screenplay.json   concept, cast, scenes and beats        voice/   one wav per line     project/  the HyperFrames project
     plan.json         the scene descriptions               audio/   voice, effects, music, mix       out/  silent.mp4, final.mp4, thumb.jpg
-    vids/             clips made in Google Vids (Veo), dropped in by hand: <scene id>.mp4
 
 Stages, each resumable: new -> screenplay -> voiced -> built -> rendered -> review -> approved | rejected -> posted.
     python longform.py all <film id>       run whatever is left        python longform.py new "<topic>" [minutes]
@@ -27,6 +26,7 @@ import lf_build
 import lf_finish
 import lf_plan
 import lf_screenplay as sc
+import lf_voice
 import sound
 
 HERE = Path(__file__).resolve().parent
@@ -137,7 +137,23 @@ def write_screenplay(film, ask_llm):
                 message=f"screenplay written: {len(sp['scenes'])} scenes, {len(sp['cast'])} characters, {sc.spoken_words(sp)} words")
 
 
-def voice_film(film, rate=1.0):
+def film_voice_engine():
+    """(engine, delivery note) for a film's voices: the premium engine chosen in Settings when its key is set, else Edge."""
+    import daily_shorts as e
+    import genmedia
+    s = e.load_settings()
+    engine = s.get("voice_engine", "edge")
+    if engine == "gemini":
+        # ponytail: Gemini's free tier is 10 voice requests a day and a film needs one per sentence, so films speak with
+        # Edge and the day's requests stay with the Shorts. With billing on the key, a films-only engine setting goes here.
+        return "edge", ""
+    if engine in lf_voice.PREMIUM_MAP and genmedia.has(engine):
+        return engine, s.get("voice_style", "")
+    return "edge", ""
+
+
+def voice_film(film, rate=1.0, engine=None):
+    """engine: force one ("edge" for a story Short); None means the film's choice (film_voice_engine)."""
     if not AUDIO_PY.exists():
         raise RuntimeError("the audio environment isn't installed (run install.bat)")
     sp = sc.load(film.screenplay)
@@ -146,34 +162,73 @@ def voice_film(film, rate=1.0):
     out = film.dir / "voice"
     out.mkdir(exist_ok=True)
     job = out / "job.json"
-    job.write_text(json.dumps({"lines": lines, "out_dir": str(out), "ffmpeg": footage.ffmpeg_exe(), "rate": rate}), encoding="utf-8")
-    film.say(f"speaking {len(lines)} lines in {len(sp['cast']) + 1} voices", 0.1)
+    engine, style = (engine, "") if engine else film_voice_engine()
+    job.write_text(json.dumps({"lines": lines, "out_dir": str(out), "ffmpeg": footage.ffmpeg_exe(), "rate": rate, "engine": engine,
+                               "style": style, "parallel": 1 if engine == "gemini" else 3}), encoding="utf-8")
+    film.say(f"speaking {len(lines)} lines in {len(sp['cast']) + 1} voices ({engine})", 0.1)
     r = subprocess.run([str(AUDIO_PY), str(HERE / "lf_voice.py"), str(job)], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       env={**os.environ, **ENV}, timeout=3600, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW | BELOW_NORMAL)
+                       env={**os.environ, **ENV}, timeout=3600 * 3, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW | BELOW_NORMAL)
     if r.returncode:
         raise RuntimeError(f"voices failed: {(r.stderr or r.stdout)[-500:].strip()}")
-    film.update(stage="voiced", progress=1.0, message=f"{len(lines)} lines spoken", error="")
+    film.update(stage="voiced", progress=1.0, voice_engine=engine, message=f"{len(lines)} lines spoken ({engine})", error="")
+
+
+def room_backgrounds(film, sp, proj):
+    """A generated backdrop per room and time of day (kept in film.dir/bg/, so a rebuild costs nothing), copied into the
+    project: {scene id: asset path}. Off when Settings say so or no paid image provider is set up: the free service
+    (Pollinations) ignores the style (photo-real behind a flat cartoon cast), sends small pictures and stamps its logo in
+    a corner, so on it the films keep their drawn rooms. Scenes where someone starts sitting or lying keep the flat room
+    (its furniture is where the cast is placed). A picture that fails leaves that scene's flat room, never stops the build."""
+    import daily_shorts as e
+    import genmedia
+    import visuals
+    s = e.load_settings()
+    style = s.get("lf_backgrounds", "off")
+    providers = [p for p in genmedia.image_providers(s.get("image_provider", "auto")) if p != "pollinations"]
+    if style == "off":
+        return {}
+    if not providers:
+        film.say("generated rooms need a paid picture service (MuAPI credits or Gemini billing): the drawn rooms stay")
+        return {}
+    budget = genmedia.Budget(float(s.get("gen_budget_usd", 1.0)) * 3, film.id)      # a film is worth a few Shorts
+    folder = film.dir / "bg"
+    folder.mkdir(exist_ok=True)
+    out, skip = {}, set()
+    for sc_ in sp["scenes"]:
+        if any(v in ("sit", "lie") for v in (sc_.get("start") or {}).values()):
+            continue
+        key = f"{sc_['room']}-{sc_['tone']}-{style}"
+        # cached under the provider that made it, so a picture from the free service (older films) is never reused
+        dest = next((p for p in (folder / f"{key}-{q}.png" for q in providers) if p.exists()), None)
+        if dest is None:
+            try:
+                film.say(f"background: {sc_['room']} at {sc_['tone']}")
+                made, provider, _ = genmedia.image(visuals.room_prompt(sc_["room"], sc_["tone"], style), folder / f"{key}.part.png",
+                                                   providers, s.get("image_model", ""), "16:9", budget, key, film.say, skip)
+                dest = made.replace(folder / f"{key}-{provider}.png")
+            except Exception as err:                                   # noqa: BLE001
+                film.say(f"background {key} skipped: {str(err)[:120]}")
+                continue
+        (proj / "assets" / "bg").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(dest, proj / "assets" / "bg" / dest.name)
+        out[sc_["id"]] = f"assets/bg/{dest.name}"
+    return out
 
 
 def build_film(film):
     sp = lf_plan.apply_style(sc.load(film.screenplay), film.meta.get("style", "cartoon"))
     timings = {x["id"]: x for x in json.loads((film.dir / "voice" / "lines.json").read_text(encoding="utf-8"))}
     proj = film.dir / "project"
-    vids = {}
-    for s in sp["scenes"]:
-        src = film.dir / "vids" / f"{s['id']}.mp4"
-        if src.exists():
-            (proj / "assets" / "vids").mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, proj / "assets" / "vids" / src.name)
-            vids[s["id"]] = f"assets/vids/{src.name}"
+    bgs = room_backgrounds(film, sp, proj)
     gap, _ = lf_plan.fit_gap(sp, timings)
-    scenes = lf_plan.plan(sp, timings, gap, vids)
+    scenes = lf_plan.plan(sp, timings, gap, bgs)
     total = lf_build.write_project(proj, scenes)
     film.plan.write_text(json.dumps(scenes), encoding="utf-8")
     lint_project(film)
     film.say("making the storyboard sheet", 0.6)
     sheet = storyboard(film, scenes)
-    film.update(stage="built", seconds=round(total, 1), progress=1.0, error="", gap=round(gap, 2), clips=len(vids), storyboard=bool(sheet),
+    film.update(stage="built", seconds=round(total, 1), progress=1.0, error="", gap=round(gap, 2), backgrounds=len(bgs),
+                storyboard=bool(sheet),
                 plan_checks=lf_finish.check_plan(scenes, sp),
                 message=f"project built: {len(scenes)} scenes, {int(total // 60)}:{int(total % 60):02d}")
 
@@ -203,17 +258,26 @@ def storyboard(film, scenes):
         times.append(round(t0 + min(s["dur"] - 0.5, max(1.0, s["dur"] * 0.45)), 2))
         t0 += s["dur"]
     try:
-        r = subprocess.run([node, str(HF), "snapshot", "--at", ",".join(str(t) for t in times)], cwd=str(film.dir / "project"), capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", env={**os.environ, **ENV}, timeout=900, stdin=subprocess.DEVNULL,
-                           creationflags=NO_WINDOW | BELOW_NORMAL)
+        r = subprocess.run([node, str(HF), "snapshot", "--no-end", "--at", ",".join(str(t) for t in times)], cwd=str(film.dir / "project"),
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env={**os.environ, **ENV}, timeout=900,
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW | BELOW_NORMAL)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    found = re.search(r"([A-Za-z]:\\[^\r\n]*?contact-sheet\.jpg)", (r.stdout or "") + (r.stderr or ""))
-    if r.returncode or not found or not Path(found.group(1)).exists():
+    # a long film's frames come on several sheets (contact-sheet-1.jpg, -2.jpg, ...): stacked into one picture, in order
+    found = set(re.findall(r"([A-Za-z]:\\[^\r\n]*?contact-sheet(?:-\d+)?\.jpg)", (r.stdout or "") + (r.stderr or "")))
+    sheets = sorted((Path(p) for p in found if Path(p).exists()), key=lambda p: int(re.sub(r"\D", "", p.stem) or 0))
+    if r.returncode or not sheets:
         return None
+    from PIL import Image
+    imgs = [Image.open(p).convert("RGB") for p in sheets]
+    board = Image.new("RGB", (max(i.width for i in imgs), sum(i.height for i in imgs)), "#1c1c1c")
+    y = 0
+    for img in imgs:
+        board.paste(img, (0, y))
+        y += img.height
     dest = film.dir / "out" / "storyboard.jpg"
     dest.parent.mkdir(exist_ok=True)
-    shutil.copyfile(found.group(1), dest)
+    board.save(dest, quality=90)
     return dest
 
 
@@ -263,6 +327,22 @@ def finish_film(film, settings):
     scenes = json.loads(film.plan.read_text(encoding="utf-8"))
     sp = sc.load(film.screenplay)
     total = lf_plan.total_seconds(scenes)
+    out = film.dir / "out"
+    final, used_music = mix_film(film, scenes, settings)
+    film.say("checking the finished film", 0.8)
+    thumb = lf_finish.make_thumbnail(final, sp["title"], out / "thumb.jpg", at=min(14.0, total / 4))
+    checks = lf_finish.check_film(final, total, film.meta.get("limits") or lf_finish.LIMITS)    # an explainer has its own length
+    pack = lf_finish.upload_pack(sp, scenes, final, out / "thumb.jpg")
+    (film.dir / "upload_pack.json").write_text(json.dumps(pack, ensure_ascii=False, indent=1), encoding="utf-8")
+    (film.dir / "manifest.json").write_text(json.dumps(lf_finish.manifest(sp, scenes, used_music, film.meta), ensure_ascii=False, indent=1), encoding="utf-8")
+    film.update(stage="review", progress=1.0, checks=checks, error="", message="ready to watch" if checks["ok"] else "ready, but some checks need a look",
+                thumb=bool(thumb))
+
+
+def mix_film(film, scenes, settings, tracks=2):
+    """Voices, effects and up to `tracks` safe-music tracks mixed under the rendered picture, loudness matched to YouTube
+    (-14 LUFS): (out/final.mp4, [(music file, its source)])."""
+    total = lf_plan.total_seconds(scenes)
     audio = film.dir / "audio"
     audio.mkdir(exist_ok=True)
     out = film.dir / "out"
@@ -272,14 +352,14 @@ def finish_film(film, settings):
         starts += [(x["id"], t0 + x["t"]) for x in s["lines"]]
         t0 += s["dur"]
     raw = lf_audio.voice_track(film.dir / "voice", starts, total, audio / "voice_raw.wav")
-    voice = sound.master_voice(raw, audio / "voice.wav", "edge")
+    voice = sound.master_voice(raw, audio / "voice.wav", film.meta.get("voice_engine", "edge"))     # each engine has its own chain
     cuts, hits = lf_audio.sfx_plan(scenes)
     sfx, _ = sound.sfx_track(audio / "sfx.wav", total, cuts, hits, settings.get("sfx_level", "subtle"), seed=len(film.id))
     music, used_music = None, []
     if settings.get("music_mode", "auto") != "none":
         import daily_shorts as e
         entries = [(n, s_, t) for n, s_, t, ok in e.music_entries() if ok]
-        files = [e.SAFE_MUSIC / n for n in lf_audio.pick_music(entries, 2, seed=len(film.id))]
+        files = [e.SAFE_MUSIC / n for n in lf_audio.pick_music(entries, tracks, seed=len(film.id))]
         if files:
             music = lf_audio.music_track(files, total, audio / "music.wav", audio)
             used_music = [(f.name, {n: s_ for n, s_, _ in entries}.get(f.name, "")) for f in files]
@@ -288,20 +368,16 @@ def finish_film(film, settings):
     film.say("matching the loudness to YouTube", 0.6)
     final = sound.normalize_video_audio(joined, out / "final.mp4")
     joined.unlink(missing_ok=True)
-    film.say("checking the finished film", 0.8)
-    thumb = lf_finish.make_thumbnail(final, sp["title"], out / "thumb.jpg", at=min(14.0, total / 4))
-    checks = lf_finish.check_film(final, total)
-    pack = lf_finish.upload_pack(sp, scenes, final, out / "thumb.jpg")
-    (film.dir / "upload_pack.json").write_text(json.dumps(pack, ensure_ascii=False, indent=1), encoding="utf-8")
-    (film.dir / "manifest.json").write_text(json.dumps(lf_finish.manifest(sp, scenes, used_music, film.meta), ensure_ascii=False, indent=1), encoding="utf-8")
-    film.update(stage="review", progress=1.0, checks=checks, error="", message="ready to watch" if checks["ok"] else "ready, but some checks need a look",
-                thumb=bool(thumb))
+    return final, used_music
 
 
 def run_all(film, settings, ask_llm=None, quality="looks"):
     """Whatever is left for this film, from where it stopped. Raises on failure with film.meta['error'] set."""
     steps = {"new": lambda: write_screenplay(film, ask_llm), "screenplay": lambda: voice_film(film, float(settings.get("lf_voice_rate", 1.0))),
              "voiced": lambda: build_film(film), "built": lambda: render_film(film, quality), "rendered": lambda: finish_film(film, settings)}
+    if film.meta.get("kind") == "explainer":          # a narrated explainer (explainer.py): its own script, drawings and build
+        import explainer
+        steps.update(new=lambda: explainer.write(film, ask_llm), voiced=lambda: explainer.build(film))
     with FilmLock():
         try:
             while film.meta["stage"] in steps:
@@ -335,7 +411,7 @@ def mark_posted(film):
 
 
 def redo_from(film, stage):
-    """Go back to `stage` (e.g. 'screenplay' to re-voice and re-render) after editing the screenplay or adding Vids clips."""
+    """Go back to `stage` (e.g. 'screenplay' to re-voice and re-render) after editing the screenplay."""
     if stage in ORDER:
         film.update(stage=stage, error="", progress=0.0, message=f"will redo from {stage}")
 

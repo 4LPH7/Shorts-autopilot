@@ -167,9 +167,27 @@ def render_cut(src, dest, start, read_len, speed, camera=None):
         raise RuntimeError(f"ffmpeg cut failed: {r.stderr[-300:]}")
 
 
+def still_filter(camera=None):
+    """Fit a still picture to the frame, then move it like a camera. A picture taller than 9:16 is centre-cropped
+    (the free Pollinations service stamps a corner logo; the extra height asked for puts it in the cropped band)."""
+    f = f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H},setsar=1,fps={FPS}"
+    return f + (f",{camera}" if camera else "")
+
+
+def render_still(src, dest, seconds, camera=None):
+    """One vertical, silent, exactly-timed piece filmed from a still picture (a generated keyframe)."""
+    r = run([ffmpeg_exe(), "-y", "-v", "error", "-loop", "1", "-framerate", str(FPS), "-t", f"{seconds:.3f}", "-i", str(src),
+             "-vf", still_filter(camera), "-t", f"{seconds:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast",
+             "-crf", "19", "-pix_fmt", "yuv420p", str(dest)])
+    if r.returncode or not Path(dest).exists():
+        raise RuntimeError(f"ffmpeg still failed: {r.stderr[-300:]}")
+    return dest
+
+
 def concat(pieces, out):
     listing = Path(out).with_suffix(".txt")
-    listing.write_text("".join(f"file '{Path(p).as_posix()}'\n" for p in pieces), encoding="utf-8")
+    # absolute paths: ffmpeg resolves list entries relative to the list file, not the working directory
+    listing.write_text("".join(f"file '{Path(p).resolve().as_posix()}'\n" for p in pieces), encoding="utf-8")
     r = run([ffmpeg_exe(), "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(listing),
              "-c", "copy", str(out)])
     if r.returncode or not Path(out).exists():
@@ -512,6 +530,19 @@ def compose(beats, ranked, work, cache_dir, log=print, camera=None):
                 raise RuntimeError(f"no clip found for beat {i + 1}")
             for c in options:
                 try:
+                    if c.get("still"):                    # a generated keyframe: filmed, always with a camera move
+                        dest = pieces_dir / f"{i + 1:02d}-{k + 1}.mp4"
+                        cam = camera(len(pieces), need) if camera else None
+                        if cam is None:
+                            import motion                 # lazy: motion imports this module
+                            cam = motion.camera_filter("push" if len(pieces) % 2 == 0 else "pull", "subtle", need)
+                        render_still(c["path"], dest, need, cam)
+                        pieces.append(dest)
+                        if c not in used:
+                            used.append(c)
+                        used_ids.add(c["id"])
+                        log(f"Beat {i + 1}.{k + 1} {need:.1f}s <- {c['id']} (generated picture)")
+                        break
                     name = f"sa-{hashlib.md5(c['id'].encode()).hexdigest()[:10]}{c.get('ext', '.mp4')}"
                     path = c.get("path") or fetch(c["url"], cache_dir / name)
                     dur = probe(path)[0] if c.get("path") else c["dur"]

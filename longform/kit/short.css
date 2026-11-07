@@ -1,0 +1,5 @@
+/* After base.css in a vertical Short's scenes only (lf_build): the world layers stay 1920x1080 under the camera; what lies
+   over the frame is frame-sized (1080x1920). Captions sit above YouTube's title/channel strip and clear of its buttons. */
+#root .cards, #root .cover { width: 1080px; height: 1920px; }
+#root .capbox { left: 40px; bottom: 470px; width: 900px; }
+#root .cp span { max-width: 900px; padding: 12px 30px; border-radius: 20px; font-size: 68px; font-weight: 900; line-height: 1.15; }

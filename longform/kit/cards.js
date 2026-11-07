@@ -5,10 +5,17 @@
   const INK = '#14183a', PAPER = '#fffdf5', GOLD = '#ffcc33', RED = '#e0475b', GREEN = '#3fa66a', BLUE = '#4a7bd6';
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   let seq = 0;
+  // A vertical Short's cards host (data-v): full-frame layers become 1080x1920, every card is centred in the upper
+  // part of the frame (above the heads) and at most 960 px wide. Compare and chart cards are never planned there.
+  const tall = (css) => {
+    const w = +((/(?:^|;)width:(\d+)px/.exec(css) || [])[1] || 0);
+    if (w >= 1900) return css.replace('width:1920px', 'width:1080px').replace('height:1080px', 'height:1920px').replace(/top:\d+px/, 'top:240px');
+    return css.replace(/(?:^|;)(?:left|right|top|width):[^;]*/g, '') + `;left:0;right:0;margin:0 auto;top:250px;width:${w ? Math.min(w, 960) + 'px' : 'fit-content'};`;
+  };
   const el = (host, pre, html, css) => {
     const d = document.createElement('div');
     d.id = `${pre}-c${seq++}`;
-    d.style.cssText = 'position:absolute;opacity:0;' + css;
+    d.style.cssText = 'position:absolute;opacity:0;' + (host.dataset && host.dataset.v ? tall(css) : css);
     d.innerHTML = html;
     host.appendChild(d);
     return d;

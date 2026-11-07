@@ -20,6 +20,8 @@ A dark-themed Windows app (CustomTkinter) that runs a faceless YouTube Shorts ch
 ```
 
 - **Topics never repeat.** An LLM (Claude by default) picks a fresh topic in your niche every time.
+- **Pictures made for the words, in one style.** In the default *Cinematic* mode the LLM writes a shot list (one shot per spoken beat), an image model paints every shot in one style pack, and each picture is filmed for exactly the beat's length with an eased camera move. Pictures come from MuAPI (a cent each), Gemini, or a free service; stock clips remain as a mode and as the fallback. See [docs/QUALITY_SETUP.md](docs/QUALITY_SETUP.md).
+- **A real narrator.** Gemini's voices (free, told how to read in plain words), ElevenLabs or MiniMax speak the script in one request; Whisper then times every word and checks every sentence. The free Microsoft and Kokoro voices are still there.
 - **Footage matches the script, to the second.** The voiceover is made first, so every sentence group ("beat") has exact timing. For each beat the app searches several free sources, then **Claude looks at the candidate clips as they will appear on a phone** and picks the best one for the words being spoken. Each clip is cut to the beat's exact length from the calm middle of the footage, so the picture changes when the words do. No clip repeats within a video. See [How clips are chosen](#how-clips-are-chosen).
 - **Studio narration:** every sentence is spoken on its own with a chosen pause after it, mastered with warmth and presence, and **checked against the script by Whisper** so a garbled sentence is caught and redone. Free Microsoft neural voices (including the newest Multilingual ones) or Kokoro running offline on this PC. Hear ten of them first with **Audition voices**. See [Narration and sound](#narration-and-sound).
 - **Sound design:** whooshes into the cuts and a hit on big numbers, all synthesised here from noise and sine waves (nothing downloaded, so no Content ID risk), with music that ducks under the voice and a mix matched to YouTube's loudness.
@@ -39,6 +41,9 @@ A dark-themed Windows app (CustomTkinter) that runs a faceless YouTube Shorts ch
 | An LLM: [Claude Code](https://claude.com/claude-code) CLI (default, uses your Claude plan), or a DeepSeek / Gemini / OpenAI / OpenRouter key, or local Ollama | writes topics, scripts, search words, titles | plan or API cost |
 | [Pixabay API key](https://pixabay.com/api/docs/) | stock footage (Pexels has paused new keys) | free |
 | *Optional:* [Coverr API key](https://api.coverr.co/docs/) | a second footage source | free |
+| *Recommended:* [MuAPI key](https://muapi.ai/dashboard) with a few dollars of credit | generated pictures for the Cinematic mode (about a cent each) | pay per picture |
+| *Recommended:* [Gemini key](https://aistudio.google.com/apikey) | premium narration (free tier: 10 requests a day, one Short is one request); its image models need billing | free / pay as you go |
+| *Optional:* ElevenLabs or MiniMax key | other premium voices | their plans |
 | [Upload-Post](https://upload-post.com) account with your YouTube channel connected | uploading | free plan: 10 uploads a month |
 
 ## Install
@@ -53,6 +58,7 @@ A dark-themed Windows app (CustomTkinter) that runs a faceless YouTube Shorts ch
 4. In the app, open the **Setup** tab and work down the checklist until every row is green ✔:
    - **Script writer:** choose `claude_code` (no key) or a provider and paste its key, then **Save**.
    - **Stock footage:** paste your Pixabay key, then **Save**. A Coverr key is optional and adds a second source.
+   - **Pictures and voices:** paste a MuAPI key (and top it up) for generated pictures, and a Gemini key for the narrator. Without them the free picture service is used (slow, softer) and the Microsoft voices speak.
    - **Upload-Post:** tick Enabled, paste the API key and enter the **profile name**, then **Save**. The profile name is the user listed on Upload-Post's *Users* page (often `default`), not your email.
    - **Daily schedule:** click **Register / repair schedule**.
    - Click **Run full check**: it tests the LLM, footage and Upload-Post in about 20 seconds.
@@ -69,10 +75,10 @@ Later, open the app from the desktop shortcut or **`Shorts Autopilot.bat`**.
 | **Review** | Videos waiting for approval, each with a thumbnail, a ▶ Play button, the script, the voice used, the result of the automatic **quality checks** (*all passed* or what to look at), and an editable **YouTube title, description and tags**. **Approve** moves it to the upload queue. **Reject** asks *why* (a reason is required), deletes the video and keeps your reason to [teach future videos](#learning-from-your-rejections). **♪ Change music...** swaps the track of one video and redoes only the final mix (about a minute). The approved queue shows the upload order, and **Back to review** pulls one out. |
 | **Upload** | Your approved videos, ready to post by hand in four clicks: see [Manual uploads](#manual-uploads). Shows whether uploads are automatic or manual right now and why. |
 | **History** | Every upload (it counts against the quota), with status and Upload-Post request id. Uploads with an unclear outcome show under **Needs checking**: look in YouTube Studio, then mark **It's live** or **Not uploaded**. **Rejected videos** lists every rejection with your reason, and **What it learned...** shows the rules future videos follow. |
-| **Long video** | Make, watch and approve 8-10 minute animated films: start one from a question, follow its progress, **Watch**, **Approve** or **Reject...** it, bring in clips made in Google Vids and copy the title, description and tags for a hand upload. See [Long videos](#long-videos). |
+| **Long video** | Make, watch and approve 8-10 minute animated films: start one from a question, follow its progress, **Watch**, **Approve** or **Reject...** it, and copy the title, description and tags for a hand upload. See [Long videos](#long-videos). |
 | **Music** | Your approved tracks with their mood tags (the AI uses the tags to match a track to each video). **▶ Listen** plays one. **Add track...** asks for the source, mood tags and a license confirmation. No tracks means voice-only videos. |
 | **Clips** | Two things. **Shorts from a video you have the rights to**: choose your own video (or one licensed for reuse), say where it comes from, and the app cuts the best moments into captioned, scored Shorts that wait in Review: see [below](#shorts-from-a-video-you-have-the-rights-to). And your own clip library: footage you download by hand from Mixkit, Vidsplay or Coverr. Add each with a source and a few tags, and the picker considers it whenever the tags match a scene. |
-| **Settings** | Niche, language, voice, **voice speed**, script rules, uploads per month, run times, number of videos to keep waiting, **music mode** (AI best fit / always one track / none), music volume, **narration and sound** (voice engine, voice, mastering, sound effects, an **Audition voices** button), **look and motion** (camera moves, colour grade, highlight colour), upload mode, quota cycle, cache cleanup, YouTube privacy. Changing the run times re-registers the schedule. You can also pause or resume the schedule here. |
+| **Settings** | Niche, language, voice, **voice speed**, script rules, uploads per month, run times, number of videos to keep waiting, **music mode** (AI best fit / always one track / none), music volume, **narration and sound** (voice engine, voice, delivery note, mastering, sound effects, an **Audition voices** button), **pictures** (cinematic / stock / hybrid, style pack, image provider, budget per video, long-film backgrounds), **look and motion** (camera moves, colour grade, highlight colour), upload mode, quota cycle, cache cleanup, YouTube privacy. Changing the run times re-registers the schedule. You can also pause or resume the schedule here. |
 | **Setup** | Health checklist with a fix button on every row (see Install). |
 | **Logs** | The full run log, with a *Problems only* filter. |
 
@@ -146,16 +152,17 @@ A reminder under the button lists the two answers YouTube asks for: **altered or
 The **Long video** page makes an 8-10 minute animated story in the style of the "What if..." explainers: a narrator, 4-5 cartoon characters who really talk, and explanation cards (a number counting up, a chart drawing itself, a notebook list, myth against reality). You give it a question; it does the rest, and nothing is posted until you approve it.
 
 1. **Screenplay.** Your Claude (the writer the Shorts use) writes a concept, a cast of 4-5 characters (look, personality, voice) and 14-18 scenes, then the lines of each scene with stage directions: mood, gesture, camera shot, explanation card. Open **Edit screenplay** to change anything by hand.
-2. **Voices.** Every character has a different Microsoft neural voice and the narrator has another. Every line is spoken on its own; the cartoon mouths follow the loudness of the audio.
-3. **Picture.** The screenplay becomes a [HyperFrames](https://github.com/heygen-com/hyperframes) project (HTML, SVG and GSAP, so every frame is exactly reproducible): flat-vector rooms, puppets that blink, breathe, walk, point, shrug and hop, camera moves between wide, medium, two-shot and close-up, captions with the speaker's name. 1920x1080 at 30 fps. The characters are **cartoon people** or **stick figures** (your choice in **New film**, or `--stick` on the command line); the same script films in either look.
+2. **Voices.** Every character has a different Microsoft neural voice and the narrator has another (or the premium engine set in Settings: ElevenLabs or MiniMax; when the Shorts use Gemini, films use Edge, because Gemini's free tier allows 10 voice requests a day and a film needs one per sentence). Every line is spoken on its own, and a character's mood colours the delivery a little (a sad line slower and lower, a surprised one quicker and higher); the narrator stays even.
+3. **Picture.** The screenplay becomes a [HyperFrames](https://github.com/heygen-com/hyperframes) project (HTML, SVG and GSAP, so every frame is exactly reproducible): flat-vector rooms, puppets that blink, breathe, shift their weight, walk, point, shrug and hop, camera moves between wide, medium, two-shot and close-up, captions with the speaker's name. 1920x1080 at 30 fps. The characters are **cartoon people** or **stick figures** (your choice in **New film**, or `--stick` on the command line); the same script films in either look.
+   - **Lip sync:** each word's mouth shapes (the 8 Preston Blair / Rhubarb shapes: closed for M B P, teeth, open, wide, round, pucker, F/V, L) are timed from the voice's own word timings, closed in the pauses, shown one frame before the sound.
+   - **Acting:** the speaker's head nods on the strong words, the nearest listener nods along, gestures overshoot a little and settle, and a gesture always ends before the character's next move.
+   - **Staging:** two characters never share a spot (a walk stops beside the others, never on top of them); someone "lying" sits up in the room's bed under a blanket (hospital and bedroom; elsewhere they sit), and gets up before walking.
 4. **Sound.** Voices mastered, sound effects synthesised on the cuts and big numbers, one or two of your approved music tracks (calm ones first) crossfaded and ducked under the voice, loudness matched to YouTube.
 5. **Checks and thumbnail.** Length, picture size, loudness, dead air and black frames are checked, a 1280x720 thumbnail is made, and the title, description (with chapter timestamps) and tags are ready to copy.
 
 **Review stops.** The [research behind this page](docs/RESEARCH_AI_VIDEO_AUTOMATION_QUALITY.md) says to check the brief and the claims before spending half an hour on media, so a film started in the app pauses twice (untick the pause box in **New film** to run straight through). After the script you see the **brief** (the question, the angle, the takeaway, three title options, the opening image) and every real-world claim the writer listed, with the ones it is unsure of marked CHECK. After the build you see a **storyboard sheet** (one frame from every scene, made in seconds) and **plan checks** (length, every character speaks, scene lengths, captions fit, claims). Approve each stop to carry on. A finished film also keeps a record of **what went into it**: voices, music with its licence note, generated clips, the claims, and what YouTube's disclosure question is about.
 
 A 9-minute film takes roughly 30-40 minutes on this PC: about 10 for the script, a few for the voices, 15-20 for the picture (three Chrome workers at below-normal priority, so the PC stays usable). A stopped film continues from where it stopped. Long films have their own lock, so they never hold up the scheduled uploads, and they are never posted automatically: **Upload by hand** gives the copy buttons, like the Upload page.
-
-**Google Vids.** Vids has no API, so the app cannot drive it; this part is by hand. The screenplay marks up to three scenes where a cinematic 8-second cutaway would help and writes the prompt. On the page: **Copy prompt**, **Open Google Vids** (Blank, then Veo), generate, download the MP4 (File, Download), then **Import clip...**. The scene is rendered again with the clip over the animation (the voices are kept). Without a clip the scene stays animated. Personal accounts get about 10 generations a month at no cost; the app never signs in to Google for you.
 
 Set up once by `install.bat` (needs Node.js 22 or newer): `cd longform` and `npm install --ignore-scripts`. HyperFrames fetches its font (Nunito, from Google Fonts) and its own headless Chrome the first time; its usage telemetry is switched off for every render. Everything a film makes lives in `longform/films/<film>/` (git-ignored).
 
@@ -171,6 +178,20 @@ On the **Clips** page, choose a video file (your own recording, one of your long
 
 The app only takes a file, never a link, and refuses to start unless the rights are stated and confirmed. Someone else's famous video is not a valid source: see [SAFETY.md](SAFETY.md). From the command line: `run_daily.bat --clipper job.json` with `{"source": "C:/videos/talk.mp4", "n": 3, "frame": "fit", "confirmed": true, "rights": "my own recording"}`. English speech only for now.
 
+## Explainer videos
+
+The **Explainer** page makes narrated explainers in the style of the animated animal and history channels: one calm narrator over flat vector drawings that move (a fish swims, a plant sways, parts appear as the narration names them, the camera pushes in), with fact cards. No characters and no paid video or picture tools: your Claude draws every scene as SVG, Edge voices it and HyperFrames animates it.
+
+1. **Find niches** runs the master prompt: niches and sub-niches that suit the format, why each works, and five topics each. Type what interests you first, or leave it empty.
+2. Click a topic (or **Make a video**), choose **Vertical Short** (30-55 seconds) or **Long video** (1-10 minutes).
+3. A Short lands in **Review** with the claims to check, like every Short. A long video appears on the **Long video** page, with the same review stops (script, storyboard), Watch, Approve and upload pack as a long film.
+
+The drawings are checked before use: anything that runs code, loads from the internet, shows text or animates on its own is taken out, and a scene whose drawing fails twice gets a plain background instead of stopping the video. From the command line: `run_daily.bat --explainer-niches animals`, `run_daily.bat --explainer job.json` with `{"topic": "...", "format": "short" | "long", "seconds": 45}`.
+
+## Animated story Shorts
+
+**Dashboard > Animated story Short** makes a 20-60 second vertical Short: a narrator tells one true, surprising story (a hook in the first two seconds, one escalation, a twist, a payoff line) while 1-3 cartoon characters act it out. Choose **What if...?** instead for an imagined situation ("What if you never needed to sleep again?") whose consequences come from real science, money or psychology; it ends on a question to the viewer. It reuses the long-film pipeline: your Claude writes the script, Edge voices it with lip sync, HyperFrames animates it on a 1080x1920 stage, and the sound gets the same mix and -14 LUFS loudness. It lands in **Review** like any other Short, counts toward the buffer, and is posted only after you approve it. The script shown in Review ends with the real-world claims the writer listed; the ones marked CHECK need verifying first. Leave the story empty and the app picks one it hasn't told. From the command line: `run_daily.bat --story "Victor Lustig sold the Eiffel Tower twice"` (or a job file `{"topic": "...", "seconds": 30, "style": "cartoon"}`); each Short's working folder is in `longform/shorts`, and `--story --resume <folder>` continues one that stopped.
+
 ## Files and folders
 
 ```
@@ -183,7 +204,9 @@ shorts-autopilot/
 ├─ task_common.ps1          shared by both schedule scripts: the hidden-launch action, wake and late-start settings
 ├─ autopilot_gui.pyw        the app (Tkinter)
 ├─ daily_shorts.py          the engine: schedule, queue, music, learning, uploads
-├─ footage.py               finding, looking at and placing clips
+├─ genmedia.py              generated media providers (MuAPI, Gemini, ElevenLabs, MiniMax, Pollinations), cost ledger, budget
+├─ visuals.py               the Cinematic mode: shot list, style packs, keyframes, camera moves over stills
+├─ footage.py               finding, looking at and placing clips (and filming a still picture)
 ├─ voices.py                the narration step: runs the worker, masters the voice, writes the subtitle files
 ├─ narrate.py               the narration worker (runs in .venv-audio): Edge or Kokoro, Whisper timing and check
 ├─ sound.py                 voice mastering and the synthesised sound effects
@@ -195,6 +218,7 @@ shorts-autopilot/
 ├─ schedule_uploads.ps1     registers one-time "post the next approved video" tasks
 ├─ longform.py              long films: stages, render, mix, checks (folder per film in longform/films)
 ├─ longform_page.py         the Long video page of the app
+├─ explainer.py             narrated explainers: niche finder, script, drawings (explainer_page.py is its page)
 ├─ clipper.py               Shorts cut from a video you have the rights to; clip_worker.py transcribes it, clipper_page.py is the Clips panel
 ├─ lf_screenplay.py         the long-film writer: concept, cast, scenes, beats, and the vocabulary the animation knows
 ├─ lf_plan.py               screenplay + voice timings -> scenes (shots, cards, captions); lf_build.py writes the HyperFrames project
@@ -225,8 +249,16 @@ Each video is an `.mp4` plus a `.json` with `topic`, `title`, `description`, `ta
 |---|---|---|
 | `niche` | Dark psychology of emotional persuasion and demographic manipulation: the viral checklist of psychological hooks and raw emotional triggers behind why people buy and believe | what every video is about |
 | `language` | `en-US` | script and metadata language |
-| `voice_engine` | `edge` | `edge` (Microsoft neural voices, free, online), `kokoro` (runs on this PC) or `mpt` (MoneyPrinterTurbo's own voiceover, the fallback) |
-| `voice` | `en-US-AndrewMultilingualNeural` | an Edge voice name, or a Kokoro voice such as `af_heart` (press **Audition voices** to hear ten) |
+| `voice_engine` | `edge` | `gemini`, `elevenlabs`, `minimax` (premium, a key each), `edge` (Microsoft neural voices, free, online), `kokoro` (runs on this PC) or `mpt` (MoneyPrinterTurbo's own voiceover, the fallback) |
+| `voice` | `en-US-AndrewMultilingualNeural` | a voice of the engine: a Gemini voice such as `Charon`, an ElevenLabs name or id, a MiniMax voice id, an Edge voice name, or a Kokoro voice such as `af_heart` (press **Audition voices** to hear them) |
+| `voice_style` | a documentary narrator | how a Gemini voice reads, in plain words |
+| `voice_model` | empty | a premium engine's model name (blank = its default) |
+| `visual_mode` | `cinematic` | `cinematic` (generated pictures in one style), `stock` (clips) or `hybrid` (clips, a generated picture where none fits) |
+| `visual_style` | `cinematic` | `cinematic`, `noir`, `documentary` or `illustrated` |
+| `image_provider` | `auto` | `auto` (every provider with a key, the free one last), `muapi`, `gemini` or `pollinations` |
+| `image_model` | empty | a provider's picture model (MuAPI default `z-image-turbo`) |
+| `gen_budget_usd` | `1.0` | the most generated media may cost per video |
+| `lf_backgrounds` | `painted` | `painted`, `photo` or `off`: generated backgrounds behind the characters of a long film. Only from a paid picture service (MuAPI credits or Gemini billing): the free one ignores the style and stamps its logo, so on it films keep their drawn rooms |
 | `voice_rate` | `1.05` | speaking speed (1.0 = normal) |
 | `voice_master` | `true` | warmth, presence and a gentle compressor on the voice |
 | `sfx_level` | `subtle` | sound effects: `off`, `subtle` (every other cut and big numbers) or `full` (every cut, an intro and a riser) |
@@ -362,6 +394,10 @@ The checks (`motion.check_ass`) allow at most two text sizes, one accent colour,
 | "Pexels key issuance paused" | Use Pixabay (the default here). |
 | Footage doesn't fit | Reject the video and say what was wrong (Footage reason): the lesson is applied to the next shot plans. Add better clips in the **Clips** tab, or a Coverr key in Setup for more candidates. |
 | "Vision pick failed" in the log | The Claude CLI couldn't read the contact sheets (not installed, not logged in, or usage limit). The first search result is used instead, so videos still finish but match less well. |
+| "Images: only the free Pollinations service is set up" and a render takes 25 minutes | No funded picture provider: MuAPI has no credits or no key, Gemini pictures need billing. Top up MuAPI (a few dollars last months) in Setup → Pictures and voices, or switch **Visuals** to Stock footage. |
+| "Studio narration failed (HTTP 429 ...)" with a Gemini voice | Gemini's free tier allows 10 voice requests a day per model; a Short is one request, a retry two. Wait for the reset, set `voice_model` to another TTS model, enable billing on the key, or choose another engine. The video still finished with MoneyPrinterTurbo's voice. |
+| Claude's usage limit ran out | Topics, scripts and screenplays switch to [OmniRoute](https://github.com/diegosouzapw/OmniRoute)'s free models by themselves (the log says "OmniRoute wrote this one instead"), and go back to Claude once the limit resets. Set up under `[app]` in MoneyPrinterTurbo's `config.toml`: `omniroute_api_key`, plus `omniroute_model` (default `Claude-free`). OmniRoute must be running on port 20128. Picture checks still need Claude. |
+| Use a Claude API key (API credits) instead of the subscription | Under `[app]` in MoneyPrinterTurbo's `config.toml` (`D:\MPT\config.toml`) fill in the `anthropic_api_key = "sk-ant-..."` line that is already there and, optionally, `anthropic_model_name = "claude-fable-5-1"` (default `claude-opus-5-5`; `anthropic_model` works too). Topics, scripts, screenplays and story Shorts then go to the API first (billed to the key's credits, with retries and no 5-hour limit); if it can't answer, the Claude Code CLI and then OmniRoute take over. Keep the key in `config.toml` rather than a system-wide `ANTHROPIC_API_KEY`, which Claude Code can also pick up for your own sessions and bill to the same credits. `--doctor` shows `claude_api` (key set, package installed, model) without sending a request. |
 | A long film stops with an error | The error is shown on the Long video page and in Logs. **Continue making it** picks up at the step that failed. "HyperFrames isn't installed": run `npm install --ignore-scripts` in the `longform` folder (needs Node.js 22+). "Another long film is being made": only one at a time. A voice error means Edge's online voices couldn't be reached: try again when the network is back. |
 | An upload is in **Needs checking** | The connection dropped mid-upload, or the run was stopped during it (PC shut down, process killed). Look in YouTube Studio, then click *It's live* or *Not uploaded*. It's never retried automatically, so you don't get double posts. |
 | `crash.log` says `window-CLOSE event`, or Task Scheduler's last result is 3221225786 (0xC000013A) | The run's console window was closed or Ctrl+C'd. Click **Setup → Daily schedule → Register or repair** so runs use the hidden launcher (no window to close). If it hit an upload, see *Needs checking* above. |
@@ -376,4 +412,5 @@ The checks (`motion.check_ass`) allow at most two text sizes, one accent colour,
 - Narration: [Kokoro-82M](https://github.com/hexgrad/kokoro) (Apache-2.0) through [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (MIT); [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (MIT) with OpenAI's [Whisper](https://github.com/openai/whisper) models (MIT); [edge-tts](https://github.com/rany2/edge-tts) for Microsoft's free neural voices.
 - Motion design rules (one accent colour, motivated motion, no zoom on every cut, safe zones): ideas from [bang-motion](https://github.com/bangtutorial/bang-motion) by bangtutorial (MIT). No code was copied. Other motion-graphics projects were studied for ideas only, because they carry no license.
 - Footage: [Pixabay](https://pixabay.com/service/license-summary/), [Coverr](https://coverr.co/license). Music: [Mixkit](https://mixkit.co/license/). Uploading: [Upload-Post](https://upload-post.com).
+- Generated pictures and voices: [MuAPI](https://muapi.ai) (Z-Image, Nano Banana, Seedream, Seedance and others, pay per call), [Gemini API](https://ai.google.dev) (voices and images), [Pollinations](https://pollinations.ai) (free pictures), [ElevenLabs](https://elevenlabs.io), [MiniMax](https://www.minimax.io). Read each provider's terms on output rights before monetising; generated pictures are illustration, never evidence, and the upload is flagged as synthetic media.
 - Shorts Autopilot is MIT licensed, see [LICENSE](LICENSE). Use it within YouTube's policies; you're responsible for what your channel posts.

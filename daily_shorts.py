@@ -84,6 +84,17 @@ DEFAULTS = {
     "motion_level": "subtle",           # animated captions and camera moves: off, subtle or dynamic
     "look": "clean",                    # one colour grade over every clip: clean, cinematic or warm
     "accent_color": "#FFD60A",          # the single highlight colour (keywords and big numbers)
+    "visual_mode": "cinematic",         # pictures: cinematic (generated keyframes, one style), stock (clips), hybrid (clips,
+                                        # a generated picture for every beat no clip fits)
+    "visual_style": "cinematic",        # the style pack for generated pictures: cinematic, noir, documentary, illustrated
+    "image_provider": "auto",           # auto (every provider with a key, the free one last), muapi, gemini, pollinations
+    "image_model": "",                  # a provider's endpoint/model name; blank = its default (MuAPI: z-image-turbo)
+    "gen_budget_usd": 1.0,              # the most generated pictures and clips may cost per video
+    "voice_style": ("Read like a gripping documentary narrator: low, intimate and deliberate, with quiet tension; "
+                    "clear consonants, no rush."),  # how a Gemini voice delivers the script (plain words)
+    "voice_model": "",                  # a premium engine's model name; blank = its default (Gemini: gemini-2.5-flash-preview-tts)
+    "lf_backgrounds": "painted",        # long films: painted or photo backgrounds behind the characters, or off
+    "short_maker": "footage",           # what a scheduled run renders: footage Shorts, animated story Shorts, or alternate
 }
 AUDIENCE_HOOKS = (
     "Men: lust, respect, primal power, fear of insignificance; "
@@ -104,10 +115,15 @@ AUDIENCE_HOOKS = (
     "Everyone: time, freedom, autonomy."
 )
 MUSIC_MODES = ("auto", "fixed", "none")
-VOICE_ENGINES = ("edge", "kokoro", "mpt")
+VOICE_ENGINES = ("edge", "kokoro", "mpt", "gemini", "elevenlabs", "minimax")
 SFX_LEVELS = ("off", "subtle", "full")
 MOTION_LEVELS = ("off", "subtle", "dynamic")
 LOOKS = ("clean", "cinematic", "warm")
+VISUAL_MODES = ("cinematic", "stock", "hybrid")
+VISUAL_STYLES = ("cinematic", "noir", "documentary", "illustrated")      # keys of visuals.STYLES
+IMAGE_PROVIDERS = ("auto", "muapi", "gemini", "pollinations")
+LF_BACKGROUNDS = ("painted", "photo", "off")
+SHORT_MAKERS = ("footage", "story", "alternate")
 # Quota cycle, copied from the settings by load_settings(). Tests set it explicitly.
 QUOTA = {"reset_day": 1, "meter_used": 0, "meter_date": None}
 
@@ -202,6 +218,22 @@ def save_settings(s):
         raise ValueError(f"motion must be one of {MOTION_LEVELS}")
     if clean["look"] not in LOOKS:
         raise ValueError(f"look must be one of {LOOKS}")
+    if clean["visual_mode"] not in VISUAL_MODES:
+        raise ValueError(f"visuals must be one of {VISUAL_MODES}")
+    if clean["visual_style"] not in VISUAL_STYLES:
+        raise ValueError(f"visual style must be one of {VISUAL_STYLES}")
+    if clean["image_provider"] not in IMAGE_PROVIDERS:
+        raise ValueError(f"image provider must be one of {IMAGE_PROVIDERS}")
+    clean["image_model"] = str(clean["image_model"] or "").strip()
+    clean["gen_budget_usd"] = float(clean["gen_budget_usd"])
+    if clean["gen_budget_usd"] < 0:
+        raise ValueError("the generated media budget can't be negative")
+    clean["voice_style"] = str(clean["voice_style"] or "").strip()[:300]
+    clean["voice_model"] = str(clean["voice_model"] or "").strip()
+    if clean["lf_backgrounds"] not in LF_BACKGROUNDS:
+        raise ValueError(f"long film backgrounds must be one of {LF_BACKGROUNDS}")
+    if clean["short_maker"] not in SHORT_MAKERS:
+        raise ValueError(f"the Short maker must be one of {SHORT_MAKERS}")
     accent = str(clean["accent_color"])
     if not (len(accent) == 7 and accent[0] == "#" and all(c in "0123456789abcdefABCDEF" for c in accent[1:])):
         raise ValueError("the highlight colour must look like #FFD60A")
@@ -627,6 +659,25 @@ def recent_tracks(n=2):
     return [m for _, m in sorted(rows, reverse=True)[:n] if m and m != "none"]
 
 
+def short_kind(meta):
+    """"story" for an animated story Short (story_short.py), "footage" for everything else."""
+    return "story" if (meta.get("visuals") or {}).get("mode") == "animated story" else "footage"
+
+
+def last_short_kind():
+    """The kind of the newest Short in review/approved/posted, or None when there are none."""
+    rows = [(m.get("rendered", ""), short_kind(m)) for folder in (REVIEW, APPROVED, POSTED)
+            for m in (load_meta(folder, stem) for stem in stems(folder))]
+    return max(rows)[1] if rows else None
+
+
+def choose_maker(setting, last):
+    """Which Short a scheduled render makes: the setting itself, or for "alternate" the other kind than `last`."""
+    if setting == "alternate":
+        return "story" if last == "footage" else "footage"          # nothing rendered yet: start with footage
+    return setting if setting in SHORT_MAKERS else "footage"
+
+
 def choose_track(settings, entries, ask_llm=None, topic="", script="", recent=()):
     """The track to use, as a filename, or None for voice only.
     mode "none" -> None. "fixed" -> the chosen track. "auto" -> Claude picks the best fit for
@@ -832,11 +883,94 @@ def slugify(text):
 
 # ---- Rendering (needs MoneyPrinterTurbo) ---------------------------------------------
 
+OMNIROUTE_URL = "http://localhost:20128/v1/chat/completions"
+CLAUDE_API_MODEL = "claude-opus-5-5"         # anthropic_model in config.toml overrides it (e.g. claude-fable-5-1)
+FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}   # take fallbacks: "default"
+
+
+def claude_api_key(app):
+    """The Claude API key: anthropic_api_key under [app] in MoneyPrinterTurbo's config.toml, else ANTHROPIC_API_KEY."""
+    return str(app.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+
+
+def claude_api_model(app):
+    """anthropic_model_name (the line MoneyPrinterTurbo's config.toml already has) or anthropic_model, else the default."""
+    return str(app.get("anthropic_model_name") or app.get("anthropic_model") or CLAUDE_API_MODEL).strip()
+
+
+def ask_api(llm, prompt, client=None):
+    """Claude through the API with a key: billed per token (or the plan's included API credit), not the Claude Code
+    subscription's 5-hour limits, with the SDK's retries (429, 5xx, timeouts) and a 10-minute wait per try. Streamed, so a
+    long script never times out mid-reply. None when no key is set or the API can't answer, so the CLI takes over."""
+    app = llm.config.app
+    key = claude_api_key(app)
+    if not key and client is None:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        print("Claude API key set, but the anthropic package is missing from MPT's Python (run install.bat); using the CLI.")
+        return None
+    client = client or anthropic.Anthropic(api_key=key, max_retries=4, timeout=600)
+    model = claude_api_model(app)
+    # fallbacks: if the model's safety check declines, the API re-runs the request on a model chosen for that case
+    rescue = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"} if model in FALLBACK_MODELS else {}
+    try:
+        with client.beta.messages.stream(model=model, max_tokens=32000, messages=[{"role": "user", "content": prompt}], **rescue) as stream:
+            msg = stream.get_final_message()
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as err:
+        print(f"Claude API: the key was refused ({err.status_code}); using the CLI. Check anthropic_api_key.")
+        return None
+    except anthropic.RateLimitError as err:          # after the SDK's own retries: a spend limit or a long rate limit
+        print(f"Claude API: rate or spend limit ({str(err)[:160]}); using the CLI.")
+        return None
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as err:
+        print(f"Claude API didn't answer ({type(err).__name__}: {str(err)[:160]}); using the CLI.")
+        return None
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    if msg.stop_reason == "refusal" or not text:
+        print(f"Claude API gave no usable answer (stop reason {msg.stop_reason}); using the CLI.")
+        return None
+    if msg.stop_reason == "max_tokens":
+        print("Claude API: the reply hit the length limit and may be cut short.")
+    return text
+
+
 def ask(llm, prompt):
+    """Claude through the API when a key is set, else (or if that fails) the Claude Code CLI, then OmniRoute."""
+    reply = ask_api(llm, prompt)
+    if reply is not None:
+        return reply
     reply = llm._generate_response(prompt)  # MPT returns "Error: ..." instead of raising
-    if reply.startswith("Error:"):
+    if not reply.startswith("Error:"):
+        return reply
+    backup = ask_omniroute(llm, prompt)       # most often Claude's usage limit ran out
+    if backup is None:
         raise RuntimeError(reply)
-    return reply
+    print(f"Claude couldn't answer ({reply[:160]}); OmniRoute wrote this one instead.")
+    return backup
+
+
+def ask_omniroute(llm, prompt):
+    """The backup writer: OmniRoute on this PC, by default its "Claude-free" mix of free models. Set up with
+    omniroute_api_key (optionally omniroute_model, omniroute_url) under [app] in MoneyPrinterTurbo's config.toml.
+    Returns None when it isn't set up or doesn't answer."""
+    import urllib.request
+    app = llm.config.app
+    key = str(app.get("omniroute_api_key") or "").strip()
+    if not key:
+        return None
+    body = {"model": app.get("omniroute_model") or "Claude-free", "stream": False,
+            "messages": [{"role": "user", "content": prompt}]}
+    req = urllib.request.Request(app.get("omniroute_url") or OMNIROUTE_URL, json.dumps(body).encode(),
+                                 {"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r:
+            text = json.loads(r.read())["choices"][0]["message"]["content"]
+        return llm._normalize_text_response(text, "omniroute")      # drops <think> blocks some free models send
+    except (OSError, ValueError, LookupError, TypeError) as e:
+        print(f"OmniRoute didn't answer either: {e}")
+        return None
 
 
 def pick_topic(llm, s, lessons=None):
@@ -1075,6 +1209,63 @@ def repair_footage(ask_llm, topic, beats, queries, ranked, weak, searchers, visi
     return ranked, left
 
 
+def generated_pictures(ask_llm, topic, beats, s, seed, work, lessons_text, vis):
+    """Every beat as a generated keyframe in one style (visuals = cinematic). Returns (ranked, camera, vis); ranked is
+    {} when too few pictures could be made, so the stock-footage path takes over. `vis` collects what the Review page
+    shows: provider, cost, which beats borrowed a neighbour's picture."""
+    import genmedia
+    import visuals
+    if not visuals.ready(s):
+        print("Visuals: no image provider is set up (a MuAPI or Gemini key in Setup); using stock footage")
+        vis["note"] = "no image provider"
+        return {}, None, vis
+    budget = genmedia.Budget(float(s.get("gen_budget_usd", 1.0)), seed)
+    try:
+        shots = visuals.parse_shots(ask_llm(visuals.shot_prompt(topic, beats, vis["style"], lessons_text)), beats)
+    except Exception as err:
+        print(f"Shot list failed ({type(err).__name__}: {str(err)[:120]}); the shots follow the words instead")
+        shots = visuals.parse_shots("", beats)
+    frames, report = visuals.make_keyframes(shots, vis["style"], work, s, budget, log=print)
+    vis.update(spent=round(budget.used, 3), providers=report["providers"], shots=[sh["shot"] for sh in shots])
+    if len(frames) < max(1, -(-len(beats) // 3)):           # under a third of the pictures: not worth it
+        print(f"Visuals: only {len(frames)} of {len(beats)} keyframes could be made; using stock footage instead")
+        vis["note"] = f"keyframes failed for beats {report['failed'][:6]}" + (f"; {report['budget_stop']}" if report.get("budget_stop") else "")
+        return {}, None, vis
+    frames, borrowed = visuals.fill_gaps(frames, len(beats))
+    if borrowed:
+        print(f"Visuals: {len(borrowed)} beat(s) reuse a neighbour's picture: {[i + 1 for i in borrowed]}")
+    vis.update(keyframes=len(beats) - len(borrowed), borrowed=[i + 1 for i in borrowed])
+    ranked = {i: [visuals.still_candidate(i, f)] for i, f in frames.items()}
+    camera = visuals.camera_for_stills(beats, s, seed, [sh["move"] for sh in shots])
+    return ranked, camera, vis
+
+
+def patch_weak_beats(ask_llm, topic, beats, ranked, weak, s, seed, work, lessons_text, vis):
+    """visuals = hybrid: every beat no stock clip fits gets a generated picture instead. Returns (ranked, still weak, vis)."""
+    import genmedia
+    import visuals
+    if not weak or not visuals.ready(s):
+        return ranked, weak, vis
+    sub = [beats[i] for i in weak]
+    budget = genmedia.Budget(float(s.get("gen_budget_usd", 1.0)), seed)
+    try:
+        shots = visuals.parse_shots(ask_llm(visuals.shot_prompt(topic, sub, vis["style"], lessons_text)), sub)
+    except Exception as err:
+        print(f"Shot list failed ({type(err).__name__}: {str(err)[:120]}); the shots follow the words instead")
+        shots = visuals.parse_shots("", sub)
+    frames, report = visuals.make_keyframes(shots, vis["style"], work, s, budget, log=print)
+    left, got = [], []
+    for n, i in enumerate(weak):
+        if n in frames:
+            ranked[i] = [visuals.still_candidate(i, frames[n])] + ranked.get(i, [])
+            got.append(i + 1)
+        else:
+            left.append(i)
+    vis.update(spent=round(budget.used, 3), providers=report["providers"], generated_beats=got)
+    print(f"Visuals: {len(got)} of {len(weak)} weak beat(s) got a generated picture")
+    return ranked, left, vis
+
+
 def quality_checks(video, work, narration=None, weak=()):
     """Automatic checks on a finished video (qa.py). Returns the report, or None if they couldn't run: a failed
     check only flags the video for you, it never blocks it. `weak` lists the beats with no strongly matching clip."""
@@ -1196,23 +1387,39 @@ def render_one(M, s):
         print(f"Voiceover {total:.1f}s -> {len(beats)} beats")
         clock.mark("narration")
 
-        # 2. Find, look at and place the footage
+        # 2. The pictures: generated keyframes in one style (cinematic), stock clips (stock), or clips with a
+        #    generated picture for every beat no clip fits (hybrid). Generated pictures fall back to stock.
         flessons = lessons_block(lessons, "footage")
-        queries = plan_queries(ask_llm, topic, beats, flessons)
-        searchers = build_searchers(M)
-        if not searchers:
-            raise RuntimeError("no footage source is set up (add a Pixabay key in Setup)")
-        cands = footage.gather(beats, queries, searchers)
-        vision, weak = ask_vision_factory(M), []
-        ranked = footage.choose_with_vision(topic, beats, cands, vision, work, flessons, weak_out=weak)
-        if weak:
-            try:
-                ranked, weak = repair_footage(ask_llm, topic, beats, queries, ranked, weak, searchers, vision, work, flessons)
-            except Exception as err:                         # the repair is a bonus: never lose the video over it
-                print(f"Footage repair skipped ({type(err).__name__}: {str(err)[:150]})")
-        clock.mark("footage search and picks")
+        vis = {"mode": s.get("visual_mode", "stock"), "style": s.get("visual_style", "cinematic"), "used": "stock"}
+        ranked, weak, camera = {}, [], None
+        if vis["mode"] == "cinematic":
+            ranked, camera, vis = generated_pictures(ask_llm, topic, beats, s, stem, work, flessons, vis)
+            if ranked:
+                vis["used"] = "generated"
+                clock.mark("shot list and keyframes")
+        if not ranked:
+            queries = plan_queries(ask_llm, topic, beats, flessons)
+            searchers = build_searchers(M)
+            if not searchers:
+                raise RuntimeError("no footage source is set up (add a Pixabay key in Setup)")
+            cands = footage.gather(beats, queries, searchers)
+            vision = ask_vision_factory(M)
+            ranked = footage.choose_with_vision(topic, beats, cands, vision, work, flessons, weak_out=weak)
+            if weak:
+                try:
+                    ranked, weak = repair_footage(ask_llm, topic, beats, queries, ranked, weak, searchers, vision, work, flessons)
+                except Exception as err:                         # the repair is a bonus: never lose the video over it
+                    print(f"Footage repair skipped ({type(err).__name__}: {str(err)[:150]})")
+            if weak and vis["mode"] != "stock" and not vis.get("note"):
+                try:
+                    ranked, weak, vis = patch_weak_beats(ask_llm, topic, beats, ranked, weak, s, stem, work, flessons, vis)
+                    vis["used"] = "mixed" if vis.get("generated_beats") else "stock"
+                except Exception as err:
+                    print(f"Generated pictures skipped ({type(err).__name__}: {str(err)[:150]})")
+            camera = camera_for(beats, s, stem)
+            clock.mark("footage search and picks")
         cache = Path(M.config.root_dir) / "storage" / "cache_videos"
-        combined, used = footage.compose(beats, ranked, work, cache, camera=camera_for(beats, s, stem))
+        combined, used = footage.compose(beats, ranked, work, cache, camera=camera)
         clock.mark("cutting the clips")
 
         # 3. Music: the best-fitting approved track (or the one you fixed, or none)
@@ -1246,6 +1453,7 @@ def render_one(M, s):
         "narration": {"engine": voice_qa["engine"], "voice": voice_qa["voice"], "match": voice_qa["mean_match"],
                       "worst": voice_qa["worst_match"], "retried": voice_qa["retried"]} if voice_qa else {"engine": "mpt"},
         "weak_beats": [i + 1 for i in weak],
+        "visuals": vis,                                   # mode, style, provider, cost and borrowed beats
         "qa": qa_report,
         "timings": clock.rows,
         "credits": footage.credits_for([c["source"] for c in used]),
@@ -1401,8 +1609,10 @@ def run(mode):
     due, why = upload_due(now, load_ledger(), int(s["monthly_uploads"]), times)
     waiting = len(stems(REVIEW)) + len(stems(APPROVED))
     print(f"Upload due: {due} ({why}) | review: {len(stems(REVIEW))}, approved: {len(stems(APPROVED))}")
+    # "Render now" (mode render) always makes a footage Short; the Dashboard has its own story button
+    maker = "footage" if mode == "render" else choose_maker(s["short_maker"], last_short_kind())
     if mode == "dry":
-        print(f"Would render: {waiting < int(s['buffer'])}")
+        print(f"Would render: {waiting < int(s['buffer'])} (maker: {maker}, setting: {s['short_maker']})")
         return 0
 
     record = {"time": now.isoformat(timespec="seconds"), "mode": mode,
@@ -1419,8 +1629,16 @@ def run(mode):
                 record["errors"].append(f"upload {status}: {error}")
 
     if mode == "render" or waiting < int(s["buffer"]):
+        record["maker"] = maker
         try:
-            record["rendered"] = render_one(M, s).name
+            if maker == "story":
+                import story_short
+                before = set(stems(REVIEW))
+                if story_short.main([]) != 0:
+                    raise RuntimeError("the story Short stopped (see the lines above)")
+                record["rendered"] = next(iter(set(stems(REVIEW)) - before), None)
+            else:
+                record["rendered"] = render_one(M, s).name
         except Exception as e:
             record["errors"].append(f"render failed: {type(e).__name__}: {e}")
             print(f"RENDER FAILED: {type(e).__name__}: {e}")
@@ -1455,6 +1673,12 @@ def doctor():
         return {"ok": bool(ok), "provider": config.app.get("llm_provider"),
                 "message": str(msg)[:300], "seconds": round(secs, 1)}
 
+    def claude_api_check():                    # no request is sent: a check must not spend the credit
+        import importlib.util
+        key, sdk = bool(claude_api_key(config.app)), importlib.util.find_spec("anthropic") is not None
+        return {"ok": key and sdk, "key_set": key, "sdk_installed": sdk, "model": claude_api_model(config.app),
+                "note": "" if key else "no key: Claude is called through the Claude Code CLI (subscription limits)"}
+
     def footage_check():
         sources = {}
         for name, fn in build_searchers(M):
@@ -1476,10 +1700,19 @@ def doctor():
         from app.services import voice
         return {"ok": True, "en_US": voice.get_all_azure_voices(["en-US"])}
 
+    def genmedia_check():
+        import genmedia
+        import visuals
+        s = load_settings()
+        return {"ok": visuals.ready(s), "providers": genmedia.status(), "image_providers": genmedia.image_providers(s["image_provider"]),
+                "visual_mode": s["visual_mode"], "spent_30d": genmedia.spent(since=(datetime.now() - timedelta(days=30)).isoformat())}
+
     check("llm", llm_check)
+    check("claude_api", claude_api_check)
     check("footage", footage_check)
     check("upload_post", upload_check)
     check("voices", voices_check)
+    check("genmedia", genmedia_check)
     report["claude_cli"] = shutil.which("claude")
     print("DOCTOR_JSON:" + json.dumps(report, ensure_ascii=False))
     return 0
@@ -1492,9 +1725,62 @@ def self_test():
     reply = 'Sure!\n```json\n["Why rich people rent", "The latte myth", "why RICH people rent"]\n```'
     assert parse_topics(reply, [], 5) == ["Why rich people rent", "The latte myth"]
     assert parse_topics(reply, ["the latte myth"], 5) == ["Why rich people rent"]
+    story_meta = {"visuals": {"mode": "animated story", "style": "cartoon"}}
+    assert short_kind(story_meta) == "story" and short_kind({"visuals": {"mode": "stock"}}) == "footage"
+    assert short_kind({}) == "footage"                                   # clipper Shorts and old metas have no mode
+    assert [choose_maker(m, "story") for m in SHORT_MAKERS] == ["footage", "story", "footage"]
+    assert choose_maker("alternate", "footage") == "story" and choose_maker("alternate", None) == "footage"
+    assert choose_maker("bogus", "story") == "footage"
     src = "# c\nCalm.mp3 | YouTube Audio Library | calm, soft\nloose.mp3\nnotes.txt | x\ngone.mp3 | YTAL"
     assert approved_tracks(src, ["calm.mp3", "loose.mp3", "notes.txt"]) == ["calm.mp3"]
     assert parse_music_sources(src)[0] == ("Calm.mp3", "YouTube Audio Library", "calm, soft")
+
+    # when Claude can't answer, OmniRoute steps in; with no backup set up, Claude's error stands
+    class FakeLLM:
+        config = type("Config", (), {"app": {}})
+        _generate_response = staticmethod(lambda prompt: "Error: usage limit reached")
+    import os                                                             # (self_test imports it again further down)
+    saved_key = os.environ.pop("ANTHROPIC_API_KEY", None)                 # the tests never call the real API
+    try:
+        try:
+            ask(FakeLLM, "hi")
+            raise AssertionError("ask hid Claude's error with no backup set up")
+        except RuntimeError as e:
+            assert "usage limit" in str(e)
+        real_backup = globals()["ask_omniroute"]
+        globals()["ask_omniroute"] = lambda llm, prompt: "backup words"
+        try:
+            assert ask(FakeLLM, "hi") == "backup words"
+        finally:
+            globals()["ask_omniroute"] = real_backup
+        # the API route (a key set): its answer when there is one, else None so the CLI takes over
+        from types import SimpleNamespace as NS
+        calls = []
+
+        class FakeClient:
+            def __init__(self, text, stop="end_turn"):
+                self.msg = NS(content=[NS(type="thinking", text=""), NS(type="text", text=text)], stop_reason=stop)
+                self.beta = NS(messages=NS(stream=self.stream))
+
+            def stream(self, **kw):
+                calls.append(kw)
+                msg = self.msg
+
+                class Ctx:
+                    __enter__ = lambda s: NS(get_final_message=lambda: msg)          # noqa: E731
+                    __exit__ = lambda s, *a: False                                   # noqa: E731
+                return Ctx()
+        keyed = type("L", (), {"config": type("C", (), {"app": {"anthropic_api_key": "test-key-not-real"}})})
+        assert claude_api_key(keyed.config.app) == "test-key-not-real" and claude_api_key({}) == ""
+        assert ask_api(FakeLLM, "hi") is None                                       # no key: the CLI as before
+        assert ask_api(keyed, "hi", FakeClient(" api words ")) == "api words"
+        assert calls[0]["model"] == CLAUDE_API_MODEL and calls[0]["fallbacks"] == "default" and calls[0]["messages"][0]["content"] == "hi"
+        assert ask_api(keyed, "hi", FakeClient("no", "refusal")) is None and ask_api(keyed, "hi", FakeClient("  ")) is None
+        keyed.config.app["anthropic_model_name"] = "claude-haiku-5-5"              # a model without server fallbacks (MPT's own line)
+        assert ask_api(keyed, "hi", FakeClient("ok")) == "ok" and calls[-1]["model"] == "claude-haiku-5-5" and "fallbacks" not in calls[-1]
+    finally:
+        if saved_key is not None:
+            os.environ["ANTHROPIC_API_KEY"] = saved_key
 
     # music choice: modes, never an unlisted/absent track, avoids repeats, falls back when Claude fails
     tr = [("a.mp3", "s", "calm"), ("b.mp3", "s", "energetic, fast"), ("c.mp3", "s", "upbeat")]
@@ -1581,6 +1867,10 @@ def self_test():
     import voices
     qa.self_test()
     sound.self_test()
+    import visuals
+    with tempfile.TemporaryDirectory() as t3:
+        print(visuals.self_test(t3))
+    assert set(VISUAL_STYLES) == set(visuals.STYLES), "VISUAL_STYLES must list visuals.STYLES"
     assert [k for _, k in narrate.split_sentences("Your phone isn't dying. It's math! Does heat matter? Yes.\n\nSmall habits, big years.")] \
         == [".", "!", "?", "p", "."]
     assert narrate.clean_spoken("Hello \U0001F48D world [scene: x] (aside) wow — yes") == "Hello world wow, yes"
@@ -1692,7 +1982,8 @@ def self_test():
             except ValueError:
                 pass
             for key, bad in (("motion_level", "wild"), ("look", "neon"), ("accent_color", "red"), ("accent_color", "#12345"),
-                             ("voice_engine", "robot"), ("sfx_level", "loud")):
+                             ("voice_engine", "robot"), ("sfx_level", "loud"), ("visual_mode", "slides"), ("visual_style", "neon"),
+                             ("image_provider", "dalle"), ("gen_budget_usd", -1), ("lf_backgrounds", "3d")):
                 try:
                     save_settings({**DEFAULTS, key: bad})
                     raise AssertionError(f"{key}={bad} saved")
@@ -1793,6 +2084,15 @@ def self_test():
             (REVIEW / "r2.mp4").write_bytes(b"x")
             (REVIEW / "r2.json").write_text('{"music": "y.mp3", "rendered": "2026-10-02T10:00:00"}', encoding="utf-8")
             assert recent_tracks(2) == ["y.mp3", "x.mp3"] and recent_tracks(1) == ["y.mp3"]
+            # the Short maker: a setting, or alternate between story and footage by the newest Short's kind
+            assert last_short_kind() == "footage"
+            POSTED.mkdir(exist_ok=True)
+            (POSTED / "s1.mp4").write_bytes(b"x")
+            (POSTED / "s1.json").write_text('{"visuals": {"mode": "animated story"}, "rendered": "2026-10-03T10:00:00"}',
+                                            encoding="utf-8")
+            assert last_short_kind() == "story"
+            for p in (POSTED / "s1.mp4", POSTED / "s1.json"):
+                p.unlink()
 
             # lock is exclusive while held, free afterwards
             with RunLock():
@@ -1870,6 +2170,8 @@ def self_test():
     import lf_tests
     lf_tests.run()
     clipper.self_test()
+    import explainer
+    explainer.self_test()
     print("self-test passed")
 
 
@@ -1945,12 +2247,34 @@ def run_command(args):
         except AlreadyRunning:
             print("Another run is in progress; try again when it has finished.")
             return 1
+    if "--explainer-niches" in args:          # niche and topic ideas for the Explainer page (explainer.py): one LLM call
+        import explainer
+        return explainer.main(["--niches", *args[args.index("--explainer-niches") + 1:]])
+    if "--explainer" in args:                 # a narrated explainer: a Short into Review (one run at a time) or a long film (the film lock)
+        import explainer
+        rest = args[args.index("--explainer") + 1:]
+        if explainer.is_long(rest):
+            return explainer.main(rest)
+        try:
+            with RunLock():
+                return explainer.main(rest)
+        except AlreadyRunning:
+            print("Another run is in progress; try again when it has finished.")
+            return 1
+    if "--story" in args:                     # an animated story Short (story_short.py) into Review: one run at a time, like a render
+        import story_short
+        try:
+            with RunLock():
+                return story_short.main(args[args.index("--story") + 1:])
+        except AlreadyRunning:
+            print("Another run is in progress; try again when it has finished.")
+            return 1
     if "--dry-run" in args:
         return run("dry")
     if "--audition" in args:                  # a mastered sample of each good free voice, to choose by ear
         import voices
         folder = BASE / "samples" / "voices"
-        made = voices.audition(folder, rate=float(load_settings()["voice_rate"]))
+        made = voices.audition(folder, rate=float(load_settings()["voice_rate"]), style=load_settings()["voice_style"])
         for label, path in made:
             print(f"{label}: {path}")
         print(f"{len(made)} samples in {folder}")
